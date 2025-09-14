@@ -3,176 +3,122 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PestPost • Admin Console (MVP – simple)</title>
+  <title>PestPost • Admin (Ultra‑Lite)</title>
   <style>
-    :root { --fg:#eaeaea; --bg:#0f1115; --muted:#9aa4b2; --card:#151821; --accent:#7c5cff; --ok:#7bf5a3; --bad:#ff8b8b; }
-    html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
-    header{padding:16px 20px;border-bottom:1px solid #222;background:linear-gradient(180deg,#121520,#0f1115)}
-    h1{margin:0;font-size:18px}
-    .wrap{max-width:1100px;margin:0 auto;padding:20px}
-    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
-    .card{background:var(--card);border:1px solid #222;border-radius:14px;padding:14px}
-    .muted{color:var(--muted)}
-    input{background:#0e1016;color:var(--fg);border:1px solid #222;border-radius:10px;padding:10px 12px;min-width:280px}
-    button{background:var(--accent);border:none;border-radius:10px;color:#fff;padding:10px 14px;cursor:pointer}
+    body{margin:0;padding:16px;background:#0f1115;color:#eaeaea;font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+    h1{margin:0 0 10px;font-size:18px}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0}
+    input{background:#0e1016;color:#eaeaea;border:1px solid #222;border-radius:8px;padding:8px 10px;min-width:320px}
+    button{background:#7c5cff;border:none;border-radius:8px;color:#fff;padding:8px 12px;cursor:pointer}
     button.secondary{background:#1e2230}
     button.ghost{background:transparent;border:1px solid #333}
-    button:disabled{opacity:.7;cursor:not-allowed}
-    .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid #374151;color:#e5e7eb;font-size:12px}
-    .pill.ok{border-color:#274a31;color:var(--ok);}
-    .toast{position:fixed;right:14px;bottom:14px;background:#131621;border:1px solid #283046;border-radius:12px;padding:12px 14px;max-width:360px;box-shadow:0 8px 30px rgba(0,0,0,.4);display:none}
-    .fatal{display:none;position:fixed;left:14px;bottom:14px;background:#2a0f12;color:#ffd7d7;border:1px solid #5a1f24;border-radius:12px;padding:10px 12px;max-width:520px}
-
-    /* ---- SIMPLE CARD LIST INSTEAD OF TABLE ---- */
-    .list{display:grid;grid-template-columns:1fr;gap:12px}
-    .draft{display:grid;grid-template-columns: 1fr; gap:12px}
-    .head{display:flex;gap:10px;align-items:center}
-    .head .spacer{flex:1}
-    .id{font-weight:600}
-    .when{color:#cfd8e3;font-size:12px}
-    .pairs{display:grid;grid-template-columns:150px 1fr;gap:8px 14px}
-    .pair-label{color:#9aa4b2}
+    #status{color:#9aa4b2}
+    .box{border:1px solid #222;border-radius:10px;padding:12px;margin-top:12px;background:#151821}
+    .log{white-space:pre-wrap;background:#0d1018;border:1px solid #222;border-radius:8px;padding:8px;max-height:220px;overflow:auto;margin-top:8px}
+    .card{border:1px solid #222;border-radius:10px;padding:10px;margin:10px 0;background:#121520}
     .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace}
-    .wraptxt{white-space:normal;word-break:break-word}
-    .ellipsis{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .actions{display:flex;gap:8px;flex-wrap:wrap}
+    .muted{color:#9aa4b2}
   </style>
-  <noscript>
-    <style>.noscript{max-width:760px;margin:30px auto;background:#1a1f2e;padding:14px;border-radius:12px;border:1px solid #2a3349}</style>
-    <div class="noscript">This page needs JavaScript. Please enable it and reload.</div>
-  </noscript>
 </head>
 <body>
-<header>
-  <div class="wrap row">
-    <h1>PestPost • Admin Console</h1>
-    <span class="pill">MVP (simple)</span>
-    <span class="muted" id="envInfo" style="margin-left:auto"></span>
-  </div>
-</header>
-
-<div class="wrap">
-  <div class="card">
-    <div class="row">
-      <label class="muted" for="token">ADMIN_API_TOKEN</label>
-      <input id="token" type="password" placeholder="Paste your admin token" />
-      <button id="saveToken">Save</button>
-      <button class="secondary" id="clearToken">Clear</button>
-      <div class="muted" id="tokenStatus"></div>
-      <div style="margin-left:auto" class="row">
-        <button id="refreshDrafts">Refresh drafts</button>
-      </div>
-    </div>
+  <h1>PestPost • Admin (Ultra‑Lite)</h1>
+  <div class="row">
+    <label for="token" class="muted">ADMIN_API_TOKEN</label>
+    <input id="token" type="password" placeholder="Paste your admin token" />
+    <button onclick="saveToken()">Save</button>
+    <button class="secondary" onclick="clearToken()">Clear</button>
+    <div id="status" class="muted"></div>
   </div>
 
-  <div class="card" style="margin-top:14px">
-    <div class="row" style="align-items:center">
-      <strong>Draft posts</strong>
-      <span id="count" class="muted"></span>
-      <div style="margin-left:auto" class="row">
-        <button class="ghost" id="showRaw">Toggle raw JSON</button>
-      </div>
-    </div>
-    <div class="list" id="cards"></div>
-    <pre id="raw" class="mono" style="display:none;overflow:auto;max-height:40vh"></pre>
+  <div class="row">
+    <button class="ghost" onclick="testJS()">Test JS</button>
+    <button class="ghost" onclick="testHealth()">Test /api/health</button>
+    <button onclick="loadDrafts()">Refresh drafts</button>
+    <div class="muted">Host: <span id="host"></span></div>
   </div>
-</div>
 
-<div class="toast" id="toast"></div>
-<div class="fatal" id="fatal"></div>
+  <div class="box">
+    <strong>Console (on‑page)</strong>
+    <div id="log" class="log"></div>
+  </div>
+
+  <div class="box">
+    <strong>Drafts</strong>
+    <div id="drafts"></div>
+  </div>
 
 <script>
-  // -------- Helpers --------
-  const $ = (s, r=document) => r.querySelector(s);
-  const toast = (msg, ok=true) => { const t=$('#toast'); t.textContent=msg; t.style.display='block'; t.style.borderColor = ok ? '#274a31' : '#4a2730'; t.style.color = ok ? '#7bf5a3' : '#ff8b8b'; setTimeout(()=> t.style.display='none', 2600); };
-  const fatal = (msg) => { const f=$('#fatal'); f.textContent='Admin console error: '+msg; f.style.display='block'; };
-  window.addEventListener('error', e=> fatal(e.message||'Unknown error'));
-  window.addEventListener('unhandledrejection', e=> fatal((e&&e.reason&&e.reason.message)||String(e.reason||e)));
-  const esc = (s='') => (s+'').replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
-  const htime = (ts) => { if(!ts) return ''; const d = new Date(ts); return d.toLocaleString(); };
-  const st = (k,v) => localStorage.setItem(k, v);
-  const gt = (k) => localStorage.getItem(k);
+  // ===== Utilities =====
+  const TOKEN_KEY = 'pp_admin_token';
+  const logEl = document.getElementById('log');
+  const draftsEl = document.getElementById('drafts');
+  function log(msg){ const t = new Date().toLocaleTimeString(); logEl.textContent += `
+[${t}] ${msg}`; logEl.scrollTop = logEl.scrollHeight; }
+  function getToken(){ return localStorage.getItem(TOKEN_KEY) || ''; }
+  function setToken(v){ localStorage.setItem(TOKEN_KEY, v); }
+  function updateStatus(){ const t = getToken(); document.getElementById('status').textContent = t? `Saved (len=${t.length})` : 'No token saved'; }
 
-  $('#envInfo').textContent = location.host + ' • simple';
+  // Global error surfacer
+  window.addEventListener('error', e=> { log('JS error: '+(e.message||'Unknown')); });
+  window.addEventListener('unhandledrejection', e=> { log('Promise error: '+((e&&e.reason&&e.reason.message)||String(e.reason||e))); });
 
-  // -------- Token --------
-  const TOKEN_KEY='pp_admin_token';
-  const getToken = () => gt(TOKEN_KEY) || '';
-  const setToken = (t) => st(TOKEN_KEY, t);
-  function updateTokenStatus(){ $('#tokenStatus').textContent = getToken()? 'Token saved in this browser (localStorage).': 'No token saved.'; }
-  $('#saveToken').addEventListener('click', ()=>{ const v=$('#token').value.trim(); if(!v){ toast('Enter a token first', false); return;} setToken(v); updateTokenStatus(); toast('Token saved'); });
-  $('#clearToken').addEventListener('click', ()=>{ localStorage.removeItem(TOKEN_KEY); updateTokenStatus(); toast('Token cleared'); });
+  // Buttons
+  function saveToken(){ const v = document.getElementById('token').value.trim(); if(!v){ log('Enter a token first'); return; } setToken(v); updateStatus(); log('Token saved.'); }
+  function clearToken(){ localStorage.removeItem(TOKEN_KEY); updateStatus(); log('Token cleared.'); }
+  function testJS(){ log('JS is running ✅'); }
+  async function testHealth(){ try{ const r = await fetch('/api/health'); log('/api/health → '+r.status); const t = await r.text(); log(t.slice(0,200)); }catch(e){ log('health error: '+e.message); } }
 
-  // -------- API --------
   async function apiFetch(path, opts={}){
-    const token=getToken(); if(!token) throw new Error('Missing ADMIN_API_TOKEN — paste and Save first.');
+    const token = getToken(); if(!token) throw new Error('Missing ADMIN_API_TOKEN — paste and Save first.');
     const headers = new Headers(opts.headers||{}); headers.set('Authorization','Bearer '+token);
     let res = await fetch(path, Object.assign({}, opts, {headers}));
     if(res.status===401||res.status===403){ const url=new URL(path, location.origin); url.searchParams.set('token', token); res = await fetch(url.toString(), Object.assign({}, opts)); }
-    if(!res.ok){ const t=await res.text(); throw new Error('HTTP '+res.status+' — '+t); }
-    const ct=res.headers.get('content-type')||''; return ct.includes('application/json')? res.json(): res.text();
+    if(!res.ok){ const txt = await res.text(); throw new Error('HTTP '+res.status+' — '+txt); }
+    const ct = res.headers.get('content-type')||''; return ct.includes('application/json') ? res.json() : res.text();
   }
 
-  // -------- Render --------
-  function renderDrafts(items){
-    const wrap = $('#cards');
-    if(!Array.isArray(items) || items.length===0){ wrap.innerHTML = '<div class="muted">No drafts yet.</div>'; return; }
-    let html='';
-    for(const it of items){
-      const id = Number(it.id)||'';
-      const status = (it.status||'draft').toLowerCase();
-      const isApproved = status==='approved';
-      const mpath = it.media_path || (it.media && it.media.storage_path) || '';
-      html += `
-        <div class="card draft">
-          <div class="head">
-            <div class="id">#${esc(id)}</div>
-            <span class="pill ${isApproved?'ok':''}">${esc(status)}</span>
-            <div class="spacer"></div>
-            <div class="when">${esc(htime(it.created_at))}</div>
-          </div>
-          <div class="pairs">
-            <div class="pair-label">from_wa</div><div class="mono ellipsis" title="${esc(it.from_wa||'')}">${esc(it.from_wa||'')}</div>
-            ${it.text_body? `<div class="pair-label">text_body</div><div class="wraptxt">${esc(it.text_body)}</div>`:''}
-            ${it.caption_seed? `<div class="pair-label">caption_seed</div><div class="wraptxt">${esc(it.caption_seed)}</div>`:''}
-            ${mpath? `<div class="pair-label">media_path</div><div class="mono ellipsis" title="${esc(mpath)}">${esc(mpath)}</div>`:''}
-            ${it.media_mime? `<div class="pair-label">media_mime</div><div>${esc(it.media_mime)}</div>`:''}
-            ${it.approved_at? `<div class="pair-label">approved_at</div><div>${esc(htime(it.approved_at))}</div>`:''}
-          </div>
-          <div class="actions">
-            ${id? `<button ${isApproved?'disabled':''} onclick="approve(${id}, this)">${isApproved?'Approved':'Approve'}</button>`:''}
-            ${id? `<button class="secondary" onclick="sendPreview(${id}, this)">Send preview</button>`:''}
-            ${mpath? `<button class="ghost" onclick="openMedia('${encodeURIComponent(mpath)}')">Open media</button>`:''}
-          </div>
-        </div>`;
-    }
-    wrap.innerHTML = html;
-  }
-
-  // -------- Actions --------
   async function loadDrafts(){
-    $('#refreshDrafts').disabled = true;
+    draftsEl.innerHTML = '<div class="muted">Loading…</div>';
     try{
       const data = await apiFetch('/api/admin-drafts?limit=50');
       const items = data.items || data || [];
-      renderDrafts(items);
-      $('#count').textContent = `(${items.length} shown)`;
-      $('#raw').textContent = JSON.stringify(data, null, 2);
-      toast('Drafts loaded');
-    }catch(e){ console.error(e); toast('Failed to load drafts: '+e.message, false); }
-    finally{ $('#refreshDrafts').disabled = false; }
+      log('Loaded drafts: '+items.length);
+      if(items.length===0){ draftsEl.innerHTML = '<div class="muted">No drafts.</div>'; return; }
+      draftsEl.innerHTML = items.map(it=> renderDraft(it)).join('');
+    }catch(e){
+      log('loadDrafts error: '+e.message);
+      draftsEl.innerHTML = '<div class="muted">Error: '+(e.message||e)+'</div>';
+    }
   }
 
-  window.approve = async function(id, btn){ if(btn) btn.disabled=true; try{ await apiFetch('/api/admin-approve?id='+encodeURIComponent(id)); toast('Approved #'+id); await loadDrafts(); }catch(e){ toast('Approve failed: '+e.message, false);} finally{ if(btn) btn.disabled=false; } }
-  window.sendPreview = async function(id, btn){ if(btn) btn.disabled=true; try{ await apiFetch('/api/admin-send-preview?id='+encodeURIComponent(id)); toast('Preview sent for #'+id); }catch(e){ toast('Preview failed: '+e.message+'
-If 190/463, refresh WA token.', false);} finally{ if(btn) btn.disabled=false; } }
-  window.openMedia = async function(storagePathEnc){ const path=decodeURIComponent(storagePathEnc); try{ const data=await apiFetch('/api/admin-media-url?path='+encodeURIComponent(path)); const url=(typeof data==='string')? data : (data.url || data.signed_url || ''); if(!url) throw new Error('No URL in response'); window.open(url, '_blank'); }catch(e){ toast('Open media failed: '+e.message, false); } }
+  function renderDraft(it){
+    const id = Number(it.id)||'';
+    const mpath = it.media_path || (it.media && it.media.storage_path) || '';
+    const status = (it.status||'draft').toLowerCase();
+    return `<div class="card">
+      <div><strong>#${id}</strong> • <span class="muted">${new Date(it.created_at).toLocaleString()}</span> • <span>${status}</span></div>
+      ${it.text_body? `<div><span class='muted'>text:</span> ${escapeHtml(it.text_body)}</div>`:''}
+      ${it.caption_seed? `<div><span class='muted'>seed:</span> ${escapeHtml(it.caption_seed)}</div>`:''}
+      ${mpath? `<div class='mono'><span class='muted'>media:</span> ${escapeHtml(mpath)}</div>`:''}
+      <div class="row">
+        ${id? `<button onclick="approve(${id}, this)">${status==='approved'?'Approved':'Approve'}</button>`:''}
+        ${id? `<button class="secondary" onclick="sendPreview(${id}, this)">Send preview</button>`:''}
+        ${mpath? `<button class="ghost" onclick="openMedia('${encodeURIComponent(mpath)}')">Open media</button>`:''}
+      </div>
+    </div>`;
+  }
 
-  // -------- Init --------
-  updateTokenStatus();
-  const saved=getToken(); if(saved) $('#token').value=saved;
-  $('#refreshDrafts').addEventListener('click', loadDrafts);
-  $('#showRaw').addEventListener('click', ()=>{ const el=$('#raw'); el.style.display = el.style.display==='none'? 'block':'none'; });
+  window.approve = async function(id, btn){ try{ btn&& (btn.disabled=true); const r = await apiFetch('/api/admin-approve?id='+encodeURIComponent(id)); log('Approved #'+id); await loadDrafts(); }catch(e){ log('approve error: '+e.message); } finally{ btn&&(btn.disabled=false); } }
+  window.sendPreview = async function(id, btn){ try{ btn&& (btn.disabled=true); const r = await apiFetch('/api/admin-send-preview?id='+encodeURIComponent(id)); log('preview ok for #'+id); }catch(e){ log('preview error: '+e.message); } finally{ btn&&(btn.disabled=false); } }
+  window.openMedia = async function(storagePathEnc){ const path=decodeURIComponent(storagePathEnc); try{ const data=await apiFetch('/api/admin-media-url?path='+encodeURIComponent(path)); const url=(typeof data==='string')? data : (data.url||data.signed_url||''); if(!url) throw new Error('No URL in response'); window.open(url,'_blank'); }catch(e){ log('openMedia error: '+e.message); } }
+
+  function escapeHtml(s){ return (s+'').replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+
+  // Init
+  document.getElementById('host').textContent = location.host;
+  const saved = getToken(); if(saved){ document.getElementById('token').value = saved; }
+  updateStatus();
+  log('Ultra‑Lite booted.');
 </script>
 </body>
 </html>
