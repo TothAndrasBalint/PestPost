@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PestPost • Admin Console (MVP)</title>
+  <style>
+    :root { --fg:#eaeaea; --bg:#0f1115; --muted:#9aa4b2; --card:#151821; --accent:#7c5cff; }
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"}
+    header{padding:16px 20px;border-bottom:1px solid #222;background:linear-gradient(180deg,#121520,#0f1115)}
+    h1{margin:0;font-size:18px;}
+    .wrap{max-width:1100px;margin:0 auto;padding:20px}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    .card{background:var(--card);border:1px solid #222;border-radius:14px;padding:14px}
+    .token{display:flex;gap:8px;align-items:center}
+    input[type="password"], input[type="text"]{background:#0e1016;color:var(--fg);border:1px solid #222;border-radius:10px;padding:10px 12px;min-width:280px}
+    button{background:var(--accent);border:none;border-radius:10px;color:#fff;padding:10px 14px;cursor:pointer}
+    button.secondary{background:#1e2230}
+    button.ghost{background:transparent;border:1px solid #333}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    .muted{color:var(--muted)}
+    table{width:100%;border-collapse:collapse;margin-top:12px}
+    th,td{padding:10px;border-bottom:1px solid #222;vertical-align:top}
+    th{font-weight:600;color:#cfd8e3;text-align:left}
+    tr:hover{background:#121420}
+    .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid #374151;color:#e5e7eb;font-size:12px}
+    .ok{color:#7bf5a3}
+    .err{color:#ff8b8b}
+    .right{margin-left:auto}
+    .actions{display:flex;gap:6px;flex-wrap:wrap}
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace}
+    .small{font-size:12px}
+    a{color:#9ecbff}
+    .toast{position:fixed;right:14px;bottom:14px;background:#131621;border:1px solid #283046;border-radius:12px;padding:12px 14px;max-width:360px;box-shadow:0 8px 30px rgba(0,0,0,.4);display:none}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap row">
+      <h1>PestPost • Admin Console</h1>
+      <span class="pill">MVP</span>
+      <span class="muted small">Vercel serverless • Supabase</span>
+      <span class="right muted small" id="envInfo"></span>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="card">
+      <div class="row">
+        <div class="token">
+          <label class="muted small" for="token">ADMIN_API_TOKEN</label>
+          <input id="token" type="password" placeholder="Paste your admin token" />
+          <button id="saveToken">Save</button>
+          <button class="secondary" id="clearToken">Clear</button>
+        </div>
+        <span id="tokenStatus" class="muted small"></span>
+        <div class="right actions">
+          <button id="refreshDrafts">Refresh drafts</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:14px">
+      <div class="row">
+        <strong>Draft posts</strong>
+        <span id="count" class="muted small"></span>
+        <div class="right actions">
+          <button class="ghost" id="showRaw">Toggle raw JSON</button>
+        </div>
+      </div>
+      <div id="tableWrap"></div>
+      <pre id="raw" class="mono small" style="display:none;overflow:auto;max-height:40vh"></pre>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+    // === Utilities ===
+    const $ = (s, r=document) => r.querySelector(s);
+    const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+    const toast = (msg, ok=true) => { const t=$('#toast'); t.textContent=msg; t.style.display='block'; t.style.borderColor = ok ? '#274a31' : '#4a2730'; t.style.color = ok ? '#7bf5a3' : '#ff8b8b'; setTimeout(()=> t.style.display='none', 2600); };
+    const esc = (s='') => (s+'').replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+    const htime = (ts) => { if(!ts) return ''; const d = new Date(ts); return d.toLocaleString(); };
+    const st = (k,v) => localStorage.setItem(k, v);
+    const gt = (k) => localStorage.getItem(k);
+
+    // Show environment hint (host)
+    $('#envInfo').textContent = location.host;
+
+    // Token handling
+    const TOKEN_KEY = 'pp_admin_token';
+    const getToken = () => gt(TOKEN_KEY) || '';
+    const setToken = (t) => st(TOKEN_KEY, t);
+
+    const updateTokenStatus = () => {
+      const present = !!getToken();
+      $('#tokenStatus').textContent = present ? 'Token saved in this browser (localStorage).' : 'No token saved.';
+    };
+
+    $('#saveToken').onclick = () => { const v=$('#token').value.trim(); if(!v){ toast('Enter a token first', false); return; } setToken(v); updateTokenStatus(); toast('Token saved'); };
+    $('#clearToken').onclick = () => { localStorage.removeItem(TOKEN_KEY); updateTokenStatus(); toast('Token cleared'); };
+
+    // API fetch with Authorization header, fallback to query param
+    async function apiFetch(path, opts={}){
+      const token = getToken();
+      if(!token) throw new Error('Missing ADMIN_API_TOKEN — paste and Save first.');
+      const headers = Object.assign({ 'Authorization': 'Bearer ' + token }, opts.headers || {});
+      const init = Object.assign({}, opts, { headers });
+      let res = await fetch(path, init);
+      if(res.status === 401 || res.status === 403){
+        // Fallback to query token for compatibility
+        const url = new URL(path, location.origin);
+        url.searchParams.set('token', token);
+        res = await fetch(url.toString(), Object.assign({}, opts, { headers: Object.assign({}, opts.headers || {}) }));
+      }
+      if(!res.ok){
+        const t = await res.text();
+        throw new Error('HTTP ' + res.status + ' — ' + t);
+      }
+      // Try JSON, otherwise return text
+      const ct = res.headers.get('content-type')||'';
+      return ct.includes('application/json') ? res.json() : res.text();
+    }
+
+    // Drafts
+    let lastRaw = null;
+
+    async function loadDrafts(){
+      $('#refreshDrafts').disabled = true;
+      try{
+        const data = await apiFetch('/api/admin-drafts?limit=50');
+        lastRaw = data;
+        renderDrafts(data.items || data || []);
+        $('#count').textContent = `(${(data.items || data || []).length} shown)`;
+        $('#raw').textContent = JSON.stringify(data, null, 2);
+        toast('Drafts loaded');
+      }catch(e){
+        console.error(e);
+        toast('Failed to load drafts: ' + e.message, false);
+      }finally{
+        $('#refreshDrafts').disabled = false;
+      }
+    }
+
+    function renderDrafts(items){
+      if(!Array.isArray(items)) items = [];
+      if(items.length === 0){ $('#tableWrap').innerHTML = '<p class="muted">No drafts yet.</p>'; return; }
+      const cols = ['id','status','created_at','from_wa','text_body','caption_seed','media_path','media_mime','approved_at'];
+      let html = '<table><thead><tr>' + cols.map(c=>`<th>${esc(c)}</th>`).join('') + '<th>Actions</th></tr></thead><tbody>';
+      for(const it of items){
+        const id = it.id ?? '';
+        const mpath = it.media_path || it.media?.storage_path || '';
+        const status = it.status || 'draft';
+        html += '<tr>'
+          + `<td class="mono">${esc(id)}</td>`
+          + `<td><span class="pill">${esc(status)}</span></td>`
+          + `<td class="small">${esc(htime(it.created_at))}</td>`
+          + `<td class="mono small">${esc(it.from_wa || '')}</td>`
+          + `<td class="small">${esc(it.text_body || '')}</td>`
+          + `<td class="small">${esc(it.caption_seed || '')}</td>`
+          + `<td class="mono small">${esc(mpath)}</td>`
+          + `<td class="small">${esc(it.media_mime || '')}</td>`
+          + `<td class="small">${esc(htime(it.approved_at))}</td>`
+          + `<td class="actions">`
+            + `<button onclick="approve(${Number(id)})">Approve</button>`
+            + `<button class="secondary" onclick="sendPreview(${Number(id)})">Send preview</button>`
+            + (mpath ? `<button class="ghost" onclick="openMedia('${encodeURIComponent(mpath)}')">Open media</button>` : '')
+          + `</td>`
+        + '</tr>';
+      }
+      html += '</tbody></table>';
+      $('#tableWrap').innerHTML = html;
+    }
+
+    // Actions
+    async function approve(id){
+      if(!id) return toast('Missing id', false);
+      const b = event?.target; if(b) b.disabled = true;
+      try{
+        const res = await apiFetch('/api/admin-approve?id=' + encodeURIComponent(id));
+        toast('Approved #' + id);
+        await loadDrafts();
+      }catch(e){ toast('Approve failed: ' + e.message, false); }
+      finally{ if(b) b.disabled = false; }
+    }
+
+    async function sendPreview(id){
+      if(!id) return toast('Missing id', false);
+      const b = event?.target; if(b) b.disabled = true;
+      try{
+        const res = await apiFetch('/api/admin-send-preview?id=' + encodeURIComponent(id));
+        toast('Preview sent for #' + id);
+      }catch(e){ toast('Preview failed: ' + e.message + '\nIf code 190/463, refresh WA token in Vercel env.', false); }
+      finally{ if(b) b.disabled = false; }
+    }
+
+    async function openMedia(storagePathEnc){
+      const path = decodeURIComponent(storagePathEnc);
+      try{
+        const data = await apiFetch('/api/admin-media-url?path=' + encodeURIComponent(path));
+        const url = (typeof data === 'string') ? data : (data.url || data.signed_url || '');
+        if(!url) throw new Error('No URL in response');
+        window.open(url, '_blank');
+      }catch(e){ toast('Open media failed: ' + e.message, false); }
+    }
+
+    // Raw toggle
+    $('#showRaw').onclick = () => {
+      const el = $('#raw');
+      el.style.display = el.style.display === 'none' ? 'block' : 'none';
+    };
+
+    // Init
+    (function init(){
+      updateTokenStatus();
+      const saved = getToken();
+      if(saved){ $('#token').value = saved; loadDrafts(); }
+      $('#refreshDrafts').onclick = loadDrafts;
+    })();
+  </script>
+</body>
+</html>
