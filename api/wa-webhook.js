@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { supabaseAdmin } from '../lib/supabase.js';
+import { saveWaMediaById } from '../lib/wa-media.js';
 
 const VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN || 'abc';
 
@@ -29,7 +30,7 @@ function verifySignature(rawBody, header, secret) {
   }
 }
 
-// Minimal extractor from WhatsApp webhook envelope
+// Extract core fields + media_id (if present)
 function parseWaEvent(envelope) {
   try {
     const entry = envelope?.entry?.[0];
@@ -41,9 +42,17 @@ function parseWaEvent(envelope) {
     const wa_message_id = msg?.id || null;
     const event_type = msg?.type || null;
 
-    return { wa_message_id, from_wa, event_type };
+    // media id for common types
+    let media_id = null;
+    if (event_type === 'image') media_id = msg?.image?.id || null;
+    else if (event_type === 'document') media_id = msg?.document?.id || null;
+    else if (event_type === 'audio') media_id = msg?.audio?.id || null;
+    else if (event_type === 'video') media_id = msg?.video?.id || null;
+    else if (event_type === 'sticker') media_id = msg?.sticker?.id || null;
+
+    return { wa_message_id, from_wa, event_type, media_id };
   } catch {
-    return { wa_message_id: null, from_wa: null, event_type: null };
+    return { wa_message_id: null, from_wa: null, event_type: null, media_id: null };
   }
 }
 
@@ -108,8 +117,8 @@ export async function POST(request) {
     });
   }
 
-  // 4) normalize a few fields
-  const { wa_message_id, from_wa, event_type } = parseWaEvent(body);
+  // 4) normalize a few fields (now includes media_id)
+  const { wa_message_id, from_wa, event_type, media_id } = parseWaEvent(body);
 
   // 5) idempotent insert into Supabase (events table)
   if (supabaseAdmin) {
@@ -124,7 +133,18 @@ export async function POST(request) {
     console.warn('Supabase env not set; skipping DB insert.');
   }
 
-  // 6) optional auto-reply (guarded)
+  // 6) if there is media, fetch & upload to Supabase Storage
+  if (media_id) {
+    try {
+      const { path, mime } = await saveWaMediaById(media_id, wa_message_id);
+      console.log('Media saved:', { wa_message_id, media_id, path, mime });
+      // Next step we'll store `path` in DB; for now it's in logs.
+    } catch (e) {
+      console.error('Media save failed:', e.message || e);
+    }
+  }
+
+  // 7) optional auto-reply
   if (AUTO_REPLY && from_wa && event_type === 'text' && PHONE_ID && TOKEN) {
     try {
       await sendWaText(from_wa, 'PestPost: köszi, megjött 👌 / thanks, received 👌');
@@ -133,7 +153,7 @@ export async function POST(request) {
     }
   }
 
-  // 7) ack to Meta
+  // 8) ack to Meta
   return new Response(JSON.stringify({ ok: true }), {
     headers: { 'content-type': 'application/json; charset=utf-8' }
   });
