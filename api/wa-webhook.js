@@ -3,6 +3,11 @@ import { supabaseAdmin } from '../lib/supabase.js';
 
 const VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN || 'abc';
 
+// Outbound (for optional auto-reply)
+const PHONE_ID = process.env.WA_PHONE_NUMBER_ID;
+const TOKEN = process.env.WA_ACCESS_TOKEN;
+const AUTO_REPLY = process.env.AUTO_REPLY === '1';
+
 // HMAC verify of X-Hub-Signature-256
 function verifySignature(rawBody, header, secret) {
   if (!header || !secret) return false;
@@ -10,7 +15,7 @@ function verifySignature(rawBody, header, secret) {
   if (scheme !== 'sha256' || !sigHex) return false;
 
   const hmac = crypto.createHmac('sha256', secret);
-  // Keep using text() + utf8 to match your working version
+  // keep utf8 text() path – matches your working version
   hmac.update(rawBody, 'utf8');
   const expected = hmac.digest('hex');
 
@@ -40,6 +45,26 @@ function parseWaEvent(envelope) {
   } catch {
     return { wa_message_id: null, from_wa: null, event_type: null };
   }
+}
+
+// Tiny helper to send a text back
+async function sendWaText(to, body) {
+  const res = await fetch(`https://graph.facebook.com/v20.0/${PHONE_ID}/messages`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      to,
+      type: 'text',
+      text: { preview_url: false, body: String(body).slice(0, 4096) }
+    })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(JSON.stringify(data));
+  return data;
 }
 
 export async function GET(request) {
@@ -91,12 +116,7 @@ export async function POST(request) {
     const { error } = await supabaseAdmin
       .from('events')
       .upsert(
-        {
-          wa_message_id,   // UNIQUE in DB → de-dupe
-          from_wa,
-          event_type,
-          raw: body        // full JSON envelope (jsonb)
-        },
+        { wa_message_id, from_wa, event_type, raw: body },
         { onConflict: 'wa_message_id', ignoreDuplicates: true }
       );
     if (error) console.error('Supabase upsert error:', error);
@@ -104,10 +124,14 @@ export async function POST(request) {
     console.warn('Supabase env not set; skipping DB insert.');
   }
 
-  // 6) log minimal event for debugging
-  console.log('[WA EVENT]', JSON.stringify(
-    body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0] || body
-  ));
+  // 6) optional auto-reply (guarded)
+  if (AUTO_REPLY && from_wa && event_type === 'text' && PHONE_ID && TOKEN) {
+    try {
+      await sendWaText(from_wa, 'PestPost: köszi, megjött 👌 / thanks, received 👌');
+    } catch (e) {
+      console.error('Auto-reply failed:', e.message || e);
+    }
+  }
 
   // 7) ack to Meta
   return new Response(JSON.stringify({ ok: true }), {
