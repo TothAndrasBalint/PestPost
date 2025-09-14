@@ -3,250 +3,176 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PestPost • Admin Console (MVP)</title>
+  <title>PestPost • Admin Console (MVP – simple)</title>
   <style>
-    :root { --fg:#eaeaea; --bg:#0f1115; --muted:#9aa4b2; --card:#151821; --accent:#7c5cff; }
-    html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"}
+    :root { --fg:#eaeaea; --bg:#0f1115; --muted:#9aa4b2; --card:#151821; --accent:#7c5cff; --ok:#7bf5a3; --bad:#ff8b8b; }
+    html,body{margin:0;padding:0;background:var(--bg);color:var(--fg);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
     header{padding:16px 20px;border-bottom:1px solid #222;background:linear-gradient(180deg,#121520,#0f1115)}
-    h1{margin:0;font-size:18px;}
+    h1{margin:0;font-size:18px}
     .wrap{max-width:1100px;margin:0 auto;padding:20px}
     .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
     .card{background:var(--card);border:1px solid #222;border-radius:14px;padding:14px}
-    .token{display:flex;gap:8px;align-items:center}
-    input[type="password"], input[type="text"]{background:#0e1016;color:var(--fg);border:1px solid #222;border-radius:10px;padding:10px 12px;min-width:280px}
+    .muted{color:var(--muted)}
+    input{background:#0e1016;color:var(--fg);border:1px solid #222;border-radius:10px;padding:10px 12px;min-width:280px}
     button{background:var(--accent);border:none;border-radius:10px;color:#fff;padding:10px 14px;cursor:pointer}
     button.secondary{background:#1e2230}
     button.ghost{background:transparent;border:1px solid #333}
     button:disabled{opacity:.7;cursor:not-allowed}
-    .muted{color:var(--muted)}
-    table{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:12px}
-    th,td{padding:10px;border-bottom:1px solid #222;vertical-align:top}
-    th{font-weight:600;color:#cfd8e3;text-align:left}
-    tr:hover{background:#121420}
     .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid #374151;color:#e5e7eb;font-size:12px}
-    .ok{color:#7bf5a3}
-    .err{color:#ff8b8b}
-    .right{margin-left:auto}
-    .actions{display:flex;flex-direction:column;gap:6px;min-width:140px}
-    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace}
-    .small{font-size:12px}
-    a{color:#9ecbff}
+    .pill.ok{border-color:#274a31;color:var(--ok);}
     .toast{position:fixed;right:14px;bottom:14px;background:#131621;border:1px solid #283046;border-radius:12px;padding:12px 14px;max-width:360px;box-shadow:0 8px 30px rgba(0,0,0,.4);display:none}
-    /* Prevent long strings from breaking layout */
+    .fatal{display:none;position:fixed;left:14px;bottom:14px;background:#2a0f12;color:#ffd7d7;border:1px solid #5a1f24;border-radius:12px;padding:10px 12px;max-width:520px}
+
+    /* ---- SIMPLE CARD LIST INSTEAD OF TABLE ---- */
+    .list{display:grid;grid-template-columns:1fr;gap:12px}
+    .draft{display:grid;grid-template-columns: 1fr; gap:12px}
+    .head{display:flex;gap:10px;align-items:center}
+    .head .spacer{flex:1}
+    .id{font-weight:600}
+    .when{color:#cfd8e3;font-size:12px}
+    .pairs{display:grid;grid-template-columns:150px 1fr;gap:8px 14px}
+    .pair-label{color:#9aa4b2}
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace}
     .wraptxt{white-space:normal;word-break:break-word}
-    .breakall{word-break:break-all}
     .ellipsis{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    /* Column widths */
-    th:nth-child(1), td:nth-child(1){width:56px}
-    th:nth-child(2), td:nth-child(2){width:110px}
-    th:nth-child(3), td:nth-child(3){width:180px}
-    th:nth-child(4), td:nth-child(4){width:150px}
-    th:nth-child(9), td:nth-child(9){width:180px}
+    .actions{display:flex;gap:8px;flex-wrap:wrap}
   </style>
   <noscript>
-    <style>body{font-family:system-ui;background:#111;color:#eee} .noscript{max-width:760px;margin:30px auto;background:#1a1f2e;padding:14px;border-radius:12px;border:1px solid #2a3349}</style>
+    <style>.noscript{max-width:760px;margin:30px auto;background:#1a1f2e;padding:14px;border-radius:12px;border:1px solid #2a3349}</style>
     <div class="noscript">This page needs JavaScript. Please enable it and reload.</div>
   </noscript>
 </head>
 <body>
-  <header>
-    <div class="wrap row">
-      <h1>PestPost • Admin Console</h1>
-      <span class="pill">MVP</span>
-      <span class="muted small">Vercel serverless • Supabase</span>
-      <span class="right muted small" id="envInfo"></span>
-    </div>
-  </header>
+<header>
+  <div class="wrap row">
+    <h1>PestPost • Admin Console</h1>
+    <span class="pill">MVP (simple)</span>
+    <span class="muted" id="envInfo" style="margin-left:auto"></span>
+  </div>
+</header>
 
-  <div class="wrap">
-    <div class="card">
-      <div class="row">
-        <div class="token">
-          <label class="muted small" for="token">ADMIN_API_TOKEN</label>
-          <input id="token" type="password" placeholder="Paste your admin token" />
-          <button id="saveToken">Save</button>
-          <button class="secondary" id="clearToken">Clear</button>
-        </div>
-        <span id="tokenStatus" class="muted small"></span>
-        <div class="right actions" style="flex-direction:row;min-width:auto">
-          <button id="refreshDrafts">Refresh drafts</button>
-        </div>
+<div class="wrap">
+  <div class="card">
+    <div class="row">
+      <label class="muted" for="token">ADMIN_API_TOKEN</label>
+      <input id="token" type="password" placeholder="Paste your admin token" />
+      <button id="saveToken">Save</button>
+      <button class="secondary" id="clearToken">Clear</button>
+      <div class="muted" id="tokenStatus"></div>
+      <div style="margin-left:auto" class="row">
+        <button id="refreshDrafts">Refresh drafts</button>
       </div>
-    </div>
-
-    <div class="card" style="margin-top:14px">
-      <div class="row">
-        <strong>Draft posts</strong>
-        <span id="count" class="muted small"></span>
-        <div class="right" style="display:flex;gap:8px;align-items:center">
-          <button class="ghost" id="showRaw">Toggle raw JSON</button>
-        </div>
-      </div>
-      <div id="tableWrap"></div>
-      <pre id="raw" class="mono small" style="display:none;overflow:auto;max-height:40vh"></pre>
     </div>
   </div>
 
-  <div class="toast" id="toast"></div>
-  <div id="fatal" style="display:none;position:fixed;left:14px;bottom:14px;background:#2a0f12;color:#ffd7d7;border:1px solid #5a1f24;border-radius:12px;padding:10px 12px;max-width:520px"></div>
+  <div class="card" style="margin-top:14px">
+    <div class="row" style="align-items:center">
+      <strong>Draft posts</strong>
+      <span id="count" class="muted"></span>
+      <div style="margin-left:auto" class="row">
+        <button class="ghost" id="showRaw">Toggle raw JSON</button>
+      </div>
+    </div>
+    <div class="list" id="cards"></div>
+    <pre id="raw" class="mono" style="display:none;overflow:auto;max-height:40vh"></pre>
+  </div>
+</div>
 
-  <script>
-    // ---- Fatal error surfacer ----
-    const showFatal = (msg) => { try{ const el=document.getElementById('fatal'); el.textContent = 'Admin console error: ' + msg; el.style.display='block'; }catch(_){} };
-    window.addEventListener('error', (e)=> showFatal(e.message||'Unknown error'));
-    window.addEventListener('unhandledrejection', (e)=> showFatal((e&&e.reason&&e.reason.message)||String(e.reason||e)));
+<div class="toast" id="toast"></div>
+<div class="fatal" id="fatal"></div>
 
-    (function(){
-      // === Utilities ===
-      const $ = (s, r=document) => r.querySelector(s);
-      const toast = (msg, ok=true) => { const t=$('#toast'); if(!t) return; t.textContent=msg; t.style.display='block'; t.style.borderColor = ok ? '#274a31' : '#4a2730'; t.style.color = ok ? '#7bf5a3' : '#ff8b8b'; setTimeout(()=> t.style.display='none', 2600); };
-      const esc = (s='') => (s+'').replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
-      const htime = (ts) => { if(!ts) return ''; const d = new Date(ts); return d.toLocaleString(); };
-      const st = (k,v) => localStorage.setItem(k, v);
-      const gt = (k) => localStorage.getItem(k);
+<script>
+  // -------- Helpers --------
+  const $ = (s, r=document) => r.querySelector(s);
+  const toast = (msg, ok=true) => { const t=$('#toast'); t.textContent=msg; t.style.display='block'; t.style.borderColor = ok ? '#274a31' : '#4a2730'; t.style.color = ok ? '#7bf5a3' : '#ff8b8b'; setTimeout(()=> t.style.display='none', 2600); };
+  const fatal = (msg) => { const f=$('#fatal'); f.textContent='Admin console error: '+msg; f.style.display='block'; };
+  window.addEventListener('error', e=> fatal(e.message||'Unknown error'));
+  window.addEventListener('unhandledrejection', e=> fatal((e&&e.reason&&e.reason.message)||String(e.reason||e)));
+  const esc = (s='') => (s+'').replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+  const htime = (ts) => { if(!ts) return ''; const d = new Date(ts); return d.toLocaleString(); };
+  const st = (k,v) => localStorage.setItem(k, v);
+  const gt = (k) => localStorage.getItem(k);
 
-      // Show environment hint (host)
-      const envInfo = $('#envInfo'); if(envInfo) envInfo.textContent = location.host + ' • v2';
+  $('#envInfo').textContent = location.host + ' • simple';
 
-      // Token handling
-      const TOKEN_KEY = 'pp_admin_token';
-      const getToken = () => gt(TOKEN_KEY) || '';
-      const setToken = (t) => st(TOKEN_KEY, t);
+  // -------- Token --------
+  const TOKEN_KEY='pp_admin_token';
+  const getToken = () => gt(TOKEN_KEY) || '';
+  const setToken = (t) => st(TOKEN_KEY, t);
+  function updateTokenStatus(){ $('#tokenStatus').textContent = getToken()? 'Token saved in this browser (localStorage).': 'No token saved.'; }
+  $('#saveToken').addEventListener('click', ()=>{ const v=$('#token').value.trim(); if(!v){ toast('Enter a token first', false); return;} setToken(v); updateTokenStatus(); toast('Token saved'); });
+  $('#clearToken').addEventListener('click', ()=>{ localStorage.removeItem(TOKEN_KEY); updateTokenStatus(); toast('Token cleared'); });
 
-      const updateTokenStatus = () => {
-        const present = !!getToken();
-        const el = $('#tokenStatus'); if(!el) return;
-        el.textContent = present ? 'Token saved in this browser (localStorage).' : 'No token saved.';
-      };
+  // -------- API --------
+  async function apiFetch(path, opts={}){
+    const token=getToken(); if(!token) throw new Error('Missing ADMIN_API_TOKEN — paste and Save first.');
+    const headers = new Headers(opts.headers||{}); headers.set('Authorization','Bearer '+token);
+    let res = await fetch(path, Object.assign({}, opts, {headers}));
+    if(res.status===401||res.status===403){ const url=new URL(path, location.origin); url.searchParams.set('token', token); res = await fetch(url.toString(), Object.assign({}, opts)); }
+    if(!res.ok){ const t=await res.text(); throw new Error('HTTP '+res.status+' — '+t); }
+    const ct=res.headers.get('content-type')||''; return ct.includes('application/json')? res.json(): res.text();
+  }
 
-      const btnSave = $('#saveToken');
-      const btnClear = $('#clearToken');
-      const btnRefresh = $('#refreshDrafts');
+  // -------- Render --------
+  function renderDrafts(items){
+    const wrap = $('#cards');
+    if(!Array.isArray(items) || items.length===0){ wrap.innerHTML = '<div class="muted">No drafts yet.</div>'; return; }
+    let html='';
+    for(const it of items){
+      const id = Number(it.id)||'';
+      const status = (it.status||'draft').toLowerCase();
+      const isApproved = status==='approved';
+      const mpath = it.media_path || (it.media && it.media.storage_path) || '';
+      html += `
+        <div class="card draft">
+          <div class="head">
+            <div class="id">#${esc(id)}</div>
+            <span class="pill ${isApproved?'ok':''}">${esc(status)}</span>
+            <div class="spacer"></div>
+            <div class="when">${esc(htime(it.created_at))}</div>
+          </div>
+          <div class="pairs">
+            <div class="pair-label">from_wa</div><div class="mono ellipsis" title="${esc(it.from_wa||'')}">${esc(it.from_wa||'')}</div>
+            ${it.text_body? `<div class="pair-label">text_body</div><div class="wraptxt">${esc(it.text_body)}</div>`:''}
+            ${it.caption_seed? `<div class="pair-label">caption_seed</div><div class="wraptxt">${esc(it.caption_seed)}</div>`:''}
+            ${mpath? `<div class="pair-label">media_path</div><div class="mono ellipsis" title="${esc(mpath)}">${esc(mpath)}</div>`:''}
+            ${it.media_mime? `<div class="pair-label">media_mime</div><div>${esc(it.media_mime)}</div>`:''}
+            ${it.approved_at? `<div class="pair-label">approved_at</div><div>${esc(htime(it.approved_at))}</div>`:''}
+          </div>
+          <div class="actions">
+            ${id? `<button ${isApproved?'disabled':''} onclick="approve(${id}, this)">${isApproved?'Approved':'Approve'}</button>`:''}
+            ${id? `<button class="secondary" onclick="sendPreview(${id}, this)">Send preview</button>`:''}
+            ${mpath? `<button class="ghost" onclick="openMedia('${encodeURIComponent(mpath)}')">Open media</button>`:''}
+          </div>
+        </div>`;
+    }
+    wrap.innerHTML = html;
+  }
 
-      if(btnSave) btnSave.addEventListener('click', ()=>{
-        try{
-          const inp = $('#token');
-          const v = (inp && inp.value ? inp.value.trim() : '');
-          if(!v){ toast('Enter a token first', false); return; }
-          setToken(v);
-          updateTokenStatus();
-          toast('Token saved');
-        }catch(e){ showFatal(e.message||e); }
-      });
-      if(btnClear) btnClear.addEventListener('click', ()=>{ try{ localStorage.removeItem(TOKEN_KEY); updateTokenStatus(); toast('Token cleared'); }catch(e){ showFatal(e.message||e); } });
+  // -------- Actions --------
+  async function loadDrafts(){
+    $('#refreshDrafts').disabled = true;
+    try{
+      const data = await apiFetch('/api/admin-drafts?limit=50');
+      const items = data.items || data || [];
+      renderDrafts(items);
+      $('#count').textContent = `(${items.length} shown)`;
+      $('#raw').textContent = JSON.stringify(data, null, 2);
+      toast('Drafts loaded');
+    }catch(e){ console.error(e); toast('Failed to load drafts: '+e.message, false); }
+    finally{ $('#refreshDrafts').disabled = false; }
+  }
 
-      // API fetch with Authorization header, fallback to query param
-      async function apiFetch(path, opts={}){
-        const token = getToken();
-        if(!token) throw new Error('Missing ADMIN_API_TOKEN — paste and Save first.');
-        const headers = new Headers(opts.headers || {});
-        headers.set('Authorization','Bearer ' + token);
-        const init = Object.assign({}, opts, { headers });
-        let res = await fetch(path, init);
-        if(res.status === 401 || res.status === 403){
-          const url = new URL(path, location.origin);
-          url.searchParams.set('token', token);
-          res = await fetch(url.toString(), Object.assign({}, opts));
-        }
-        if(!res.ok){
-          const t = await res.text();
-          throw new Error('HTTP ' + res.status + ' — ' + t);
-        }
-        const ct = res.headers.get('content-type')||'';
-        return ct.includes('application/json') ? res.json() : res.text();
-      }
+  window.approve = async function(id, btn){ if(btn) btn.disabled=true; try{ await apiFetch('/api/admin-approve?id='+encodeURIComponent(id)); toast('Approved #'+id); await loadDrafts(); }catch(e){ toast('Approve failed: '+e.message, false);} finally{ if(btn) btn.disabled=false; } }
+  window.sendPreview = async function(id, btn){ if(btn) btn.disabled=true; try{ await apiFetch('/api/admin-send-preview?id='+encodeURIComponent(id)); toast('Preview sent for #'+id); }catch(e){ toast('Preview failed: '+e.message+'
+If 190/463, refresh WA token.', false);} finally{ if(btn) btn.disabled=false; } }
+  window.openMedia = async function(storagePathEnc){ const path=decodeURIComponent(storagePathEnc); try{ const data=await apiFetch('/api/admin-media-url?path='+encodeURIComponent(path)); const url=(typeof data==='string')? data : (data.url || data.signed_url || ''); if(!url) throw new Error('No URL in response'); window.open(url, '_blank'); }catch(e){ toast('Open media failed: '+e.message, false); } }
 
-      // Drafts
-      async function loadDrafts(){
-        if(btnRefresh) btnRefresh.disabled = true;
-        try{
-          const data = await apiFetch('/api/admin-drafts?limit=50');
-          const items = data.items || data || [];
-          renderDrafts(items);
-          const count = document.getElementById('count'); if(count) count.textContent = `(${items.length} shown)`;
-          const raw = document.getElementById('raw'); if(raw) raw.textContent = JSON.stringify(data, null, 2);
-          toast('Drafts loaded');
-        }catch(e){ console.error(e); toast('Failed to load drafts: ' + e.message, false); }
-        finally{ if(btnRefresh) btnRefresh.disabled = false; }
-      }
-
-      function cell(title, inner, classes=''){
-        return `<td class="${classes}" title="${esc(title||'')}">${inner}</td>`;
-      }
-
-      function renderDrafts(items){
-        if(!Array.isArray(items)) items = [];
-        const wrap = document.getElementById('tableWrap');
-        if(items.length === 0){ if(wrap) wrap.innerHTML = '<p class="muted">No drafts yet.</p>'; return; }
-        const cols = ['id','status','created_at','from_wa','text_body','caption_seed','media_path','media_mime','approved_at'];
-        let html = '<table><thead><tr>' + cols.map(c=>`<th>${esc(c)}</th>`).join('') + '<th>Actions</th></tr></thead><tbody>';
-        for(const it of items){
-          const id = Number(it.id)||'';
-          const mpath = it.media_path || (it.media && it.media.storage_path) || '';
-          const status = (it.status||'draft').toLowerCase();
-          const isApproved = status === 'approved';
-          html += '<tr>'
-            + `<td class="mono">${esc(id)}</td>`
-            + `<td>${isApproved ? '<span class="pill" style="border-color:#274a31;color:#7bf5a3">approved</span>' : '<span class="pill">draft</span>'}</td>`
-            + cell(it.created_at, esc(htime(it.created_at)), 'small')
-            + cell(it.from_wa, `<span class=\"mono small ellipsis\">${esc(it.from_wa||'')}</span>`, '')
-            + cell(it.text_body, `<span class=\"small wraptxt\">${esc(it.text_body||'')}</span>`, '')
-            + cell(it.caption_seed, `<span class=\"small wraptxt\">${esc(it.caption_seed||'')}</span>`, '')
-            + cell(mpath, `<span class=\"mono small breakall\">${esc(mpath)}</span>`, '')
-            + cell(it.media_mime, `<span class=\"small\">${esc(it.media_mime||'')}</span>`, '')
-            + cell(it.approved_at, esc(htime(it.approved_at)), 'small')
-            + `<td class=\"actions\">`
-              + (id ? `<button onclick=\"approve(${id}, this)\" ${isApproved ? 'disabled':''}>${isApproved ? 'Approved':'Approve'}</button>` : '')
-              + (id ? `<button class=\"secondary\" onclick=\"sendPreview(${id}, this)\">Send preview</button>` : '')
-              + (mpath ? `<button class=\"ghost\" onclick=\"openMedia('${encodeURIComponent(mpath)}')\">Open media</button>` : '')
-            + `</td>`
-          + '</tr>';
-        }
-        html += '</tbody></table>';
-        if(wrap) wrap.innerHTML = html;
-      }
-
-      // Actions
-      window.approve = async function(id, btn){
-        if(!id) return toast('Missing id', false);
-        if(btn) btn.disabled = true;
-        try{ await apiFetch('/api/admin-approve?id=' + encodeURIComponent(id)); toast('Approved #' + id); await loadDrafts(); }
-        catch(e){ toast('Approve failed: ' + e.message, false); }
-        finally{ if(btn) btn.disabled = false; }
-      }
-
-      window.sendPreview = async function(id, btn){
-        if(!id) return toast('Missing id', false);
-        if(btn) btn.disabled = true;
-        try{ await apiFetch('/api/admin-send-preview?id=' + encodeURIComponent(id)); toast('Preview sent for #' + id); }
-        catch(e){ toast('Preview failed: ' + e.message + '\\nIf code 190/463, refresh WA token in Vercel env.', false); }
-        finally{ if(btn) btn.disabled = false; }
-      }
-
-      window.openMedia = async function(storagePathEnc){
-        const path = decodeURIComponent(storagePathEnc);
-        try{
-          const data = await apiFetch('/api/admin-media-url?path=' + encodeURIComponent(path));
-          const url = (typeof data === 'string') ? data : (data.url || data.signed_url || '');
-          if(!url) throw new Error('No URL in response');
-          window.open(url, '_blank');
-        }catch(e){ toast('Open media failed: ' + e.message, false); }
-      }
-
-      // Raw toggle
-      const btnRaw = document.getElementById('showRaw');
-      if(btnRaw) btnRaw.addEventListener('click', ()=>{
-        const el = document.getElementById('raw');
-        if(!el) return; el.style.display = el.style.display === 'none' ? 'block' : 'none';
-      });
-
-      // Init
-      updateTokenStatus();
-      const saved = getToken();
-      const tokenInput = document.getElementById('token');
-      if(saved && tokenInput){ tokenInput.value = saved; }
-      if(btnRefresh) btnRefresh.addEventListener('click', loadDrafts);
-    })();
-  </script>
+  // -------- Init --------
+  updateTokenStatus();
+  const saved=getToken(); if(saved) $('#token').value=saved;
+  $('#refreshDrafts').addEventListener('click', loadDrafts);
+  $('#showRaw').addEventListener('click', ()=>{ const el=$('#raw'); el.style.display = el.style.display==='none'? 'block':'none'; });
+</script>
 </body>
 </html>
