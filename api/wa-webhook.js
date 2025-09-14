@@ -133,12 +133,20 @@ export async function POST(request) {
     console.warn('Supabase env not set; skipping DB insert.');
   }
 
-  // 6) if there is media, fetch & upload to Supabase Storage
+  // 6) if there is media, fetch & upload to Supabase Storage, then write path+mime
   if (media_id) {
     try {
       const { path, mime } = await saveWaMediaById(media_id, wa_message_id);
       console.log('Media saved:', { wa_message_id, media_id, path, mime });
-      // Next step we'll store `path` in DB; for now it's in logs.
+  
+      if (supabaseAdmin && wa_message_id) {
+        const { error: upErr } = await supabaseAdmin
+          .from('events')
+          .update({ media_path: path, media_mime: mime })
+          .eq('wa_message_id', wa_message_id);
+  
+        if (upErr) console.error('Supabase update (media_path) error:', upErr);
+      }
     } catch (e) {
       console.error('Media save failed:', e.message || e);
     }
