@@ -17,9 +17,9 @@
     button{background:var(--accent);border:none;border-radius:10px;color:#fff;padding:10px 14px;cursor:pointer}
     button.secondary{background:#1e2230}
     button.ghost{background:transparent;border:1px solid #333}
-    button:disabled{opacity:.6;cursor:not-allowed}
+    button:disabled{opacity:.7;cursor:not-allowed}
     .muted{color:var(--muted)}
-    table{width:100%;border-collapse:collapse;margin-top:12px}
+    table{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:12px}
     th,td{padding:10px;border-bottom:1px solid #222;vertical-align:top}
     th{font-weight:600;color:#cfd8e3;text-align:left}
     tr:hover{background:#121420}
@@ -27,11 +27,21 @@
     .ok{color:#7bf5a3}
     .err{color:#ff8b8b}
     .right{margin-left:auto}
-    .actions{display:flex;gap:6px;flex-wrap:wrap}
+    .actions{display:flex;flex-direction:column;gap:6px;min-width:140px}
     .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace}
     .small{font-size:12px}
     a{color:#9ecbff}
     .toast{position:fixed;right:14px;bottom:14px;background:#131621;border:1px solid #283046;border-radius:12px;padding:12px 14px;max-width:360px;box-shadow:0 8px 30px rgba(0,0,0,.4);display:none}
+    /* Prevent long strings from breaking layout */
+    .wraptxt{white-space:normal;word-break:break-word}
+    .breakall{word-break:break-all}
+    .ellipsis{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    /* Column widths */
+    th:nth-child(1), td:nth-child(1){width:56px}
+    th:nth-child(2), td:nth-child(2){width:110px}
+    th:nth-child(3), td:nth-child(3){width:180px}
+    th:nth-child(4), td:nth-child(4){width:150px}
+    th:nth-child(9), td:nth-child(9){width:180px}
   </style>
 </head>
 <body>
@@ -54,7 +64,7 @@
           <button class="secondary" id="clearToken">Clear</button>
         </div>
         <span id="tokenStatus" class="muted small"></span>
-        <div class="right actions">
+        <div class="right actions" style="flex-direction:row;min-width:auto">
           <button id="refreshDrafts">Refresh drafts</button>
         </div>
       </div>
@@ -64,7 +74,7 @@
       <div class="row">
         <strong>Draft posts</strong>
         <span id="count" class="muted small"></span>
-        <div class="right actions">
+        <div class="right" style="display:flex;gap:8px;align-items:center">
           <button class="ghost" id="showRaw">Toggle raw JSON</button>
         </div>
       </div>
@@ -118,7 +128,6 @@
         const t = await res.text();
         throw new Error('HTTP ' + res.status + ' — ' + t);
       }
-      // Try JSON, otherwise return text
       const ct = res.headers.get('content-type')||'';
       return ct.includes('application/json') ? res.json() : res.text();
     }
@@ -131,8 +140,9 @@
       try{
         const data = await apiFetch('/api/admin-drafts?limit=50');
         lastRaw = data;
-        renderDrafts(data.items || data || []);
-        $('#count').textContent = `(${(data.items || data || []).length} shown)`;
+        const items = data.items || data || [];
+        renderDrafts(items);
+        $('#count').textContent = `(${items.length} shown)`;
         $('#raw').textContent = JSON.stringify(data, null, 2);
         toast('Drafts loaded');
       }catch(e){
@@ -143,29 +153,34 @@
       }
     }
 
+    function cell(title, inner, classes=''){
+      return `<td class="${classes}" title="${esc(title||'')}">${inner}</td>`;
+    }
+
     function renderDrafts(items){
       if(!Array.isArray(items)) items = [];
       if(items.length === 0){ $('#tableWrap').innerHTML = '<p class="muted">No drafts yet.</p>'; return; }
       const cols = ['id','status','created_at','from_wa','text_body','caption_seed','media_path','media_mime','approved_at'];
       let html = '<table><thead><tr>' + cols.map(c=>`<th>${esc(c)}</th>`).join('') + '<th>Actions</th></tr></thead><tbody>';
       for(const it of items){
-        const id = it.id ?? '';
+        const id = Number(it.id)||'';
         const mpath = it.media_path || it.media?.storage_path || '';
         const status = it.status || 'draft';
+        const isApproved = status.toLowerCase() === 'approved';
         html += '<tr>'
           + `<td class="mono">${esc(id)}</td>`
-          + `<td><span class="pill">${esc(status)}</span></td>`
-          + `<td class="small">${esc(htime(it.created_at))}</td>`
-          + `<td class="mono small">${esc(it.from_wa || '')}</td>`
-          + `<td class="small">${esc(it.text_body || '')}</td>`
-          + `<td class="small">${esc(it.caption_seed || '')}</td>`
-          + `<td class="mono small">${esc(mpath)}</td>`
-          + `<td class="small">${esc(it.media_mime || '')}</td>`
-          + `<td class="small">${esc(htime(it.approved_at))}</td>`
+          + `<td>${isApproved ? '<span class="pill" style="border-color:#274a31;color:#7bf5a3">approved</span>' : '<span class="pill">draft</span>'}</td>`
+          + cell(it.created_at, esc(htime(it.created_at)), 'small')
+          + cell(it.from_wa, `<span class="mono small ellipsis">${esc(it.from_wa||'')}</span>`, '')
+          + cell(it.text_body, `<span class="small wraptxt">${esc(it.text_body||'')}</span>`, '')
+          + cell(it.caption_seed, `<span class="small wraptxt">${esc(it.caption_seed||'')}</span>`, '')
+          + cell(mpath, `<span class="mono small breakall">${esc(mpath)}</span>`, '')
+          + cell(it.media_mime, `<span class="small">${esc(it.media_mime||'')}</span>`, '')
+          + cell(it.approved_at, esc(htime(it.approved_at)), 'small')
           + `<td class="actions">`
-            + `<button onclick="approve(${Number(id)})">Approve</button>`
-            + `<button class="secondary" onclick="sendPreview(${Number(id)})">Send preview</button>`
-            + (mpath ? `<button class="ghost" onclick="openMedia('${encodeURIComponent(mpath)}')">Open media</button>` : '')
+            + `<button onclick="approve(${id}, this)" ${isApproved ? 'disabled': ''}>${isApproved ? 'Approved' : 'Approve'}</button>`
+            + `<button class="secondary" onclick="sendPreview(${id}, this)">Send preview</button>`
+            + (mpath ? `<button class="ghost" onclick="openMedia('${encodeURIComponent(mpath)}', this)">Open media</button>` : '')
           + `</td>`
         + '</tr>';
       }
@@ -174,25 +189,26 @@
     }
 
     // Actions
-    async function approve(id){
+    async function approve(id, btn){
       if(!id) return toast('Missing id', false);
-      const b = event?.target; if(b) b.disabled = true;
+      if(btn) btn.disabled = true;
       try{
-        const res = await apiFetch('/api/admin-approve?id=' + encodeURIComponent(id));
+        await apiFetch('/api/admin-approve?id=' + encodeURIComponent(id));
         toast('Approved #' + id);
         await loadDrafts();
       }catch(e){ toast('Approve failed: ' + e.message, false); }
-      finally{ if(b) b.disabled = false; }
+      finally{ if(btn) btn.disabled = false; }
     }
 
-    async function sendPreview(id){
+    async function sendPreview(id, btn){
       if(!id) return toast('Missing id', false);
-      const b = event?.target; if(b) b.disabled = true;
+      if(btn) btn.disabled = true;
       try{
-        const res = await apiFetch('/api/admin-send-preview?id=' + encodeURIComponent(id));
+        await apiFetch('/api/admin-send-preview?id=' + encodeURIComponent(id));
         toast('Preview sent for #' + id);
-      }catch(e){ toast('Preview failed: ' + e.message + '\nIf code 190/463, refresh WA token in Vercel env.', false); }
-      finally{ if(b) b.disabled = false; }
+      }catch(e){ toast('Preview failed: ' + e.message + '
+If code 190/463, refresh WA token in Vercel env.', false); }
+      finally{ if(btn) btn.disabled = false; }
     }
 
     async function openMedia(storagePathEnc){
