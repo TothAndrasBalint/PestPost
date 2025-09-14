@@ -43,6 +43,10 @@
     th:nth-child(4), td:nth-child(4){width:150px}
     th:nth-child(9), td:nth-child(9){width:180px}
   </style>
+  <noscript>
+    <style>body{font-family:system-ui;background:#111;color:#eee} .noscript{max-width:760px;margin:30px auto;background:#1a1f2e;padding:14px;border-radius:12px;border:1px solid #2a3349}</style>
+    <div class="noscript">This page needs JavaScript. Please enable it and reload.</div>
+  </noscript>
 </head>
 <body>
   <header>
@@ -84,155 +88,164 @@
   </div>
 
   <div class="toast" id="toast"></div>
+  <div id="fatal" style="display:none;position:fixed;left:14px;bottom:14px;background:#2a0f12;color:#ffd7d7;border:1px solid #5a1f24;border-radius:12px;padding:10px 12px;max-width:520px"></div>
 
   <script>
-    // === Utilities ===
-    const $ = (s, r=document) => r.querySelector(s);
-    const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
-    const toast = (msg, ok=true) => { const t=$('#toast'); t.textContent=msg; t.style.display='block'; t.style.borderColor = ok ? '#274a31' : '#4a2730'; t.style.color = ok ? '#7bf5a3' : '#ff8b8b'; setTimeout(()=> t.style.display='none', 2600); };
-    const esc = (s='') => (s+'').replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
-    const htime = (ts) => { if(!ts) return ''; const d = new Date(ts); return d.toLocaleString(); };
-    const st = (k,v) => localStorage.setItem(k, v);
-    const gt = (k) => localStorage.getItem(k);
+    // ---- Fatal error surfacer ----
+    const showFatal = (msg) => { try{ const el=document.getElementById('fatal'); el.textContent = 'Admin console error: ' + msg; el.style.display='block'; }catch(_){} };
+    window.addEventListener('error', (e)=> showFatal(e.message||'Unknown error'));
+    window.addEventListener('unhandledrejection', (e)=> showFatal((e&&e.reason&&e.reason.message)||String(e.reason||e)));
 
-    // Show environment hint (host)
-    $('#envInfo').textContent = location.host;
+    (function(){
+      // === Utilities ===
+      const $ = (s, r=document) => r.querySelector(s);
+      const toast = (msg, ok=true) => { const t=$('#toast'); if(!t) return; t.textContent=msg; t.style.display='block'; t.style.borderColor = ok ? '#274a31' : '#4a2730'; t.style.color = ok ? '#7bf5a3' : '#ff8b8b'; setTimeout(()=> t.style.display='none', 2600); };
+      const esc = (s='') => (s+'').replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+      const htime = (ts) => { if(!ts) return ''; const d = new Date(ts); return d.toLocaleString(); };
+      const st = (k,v) => localStorage.setItem(k, v);
+      const gt = (k) => localStorage.getItem(k);
 
-    // Token handling
-    const TOKEN_KEY = 'pp_admin_token';
-    const getToken = () => gt(TOKEN_KEY) || '';
-    const setToken = (t) => st(TOKEN_KEY, t);
+      // Show environment hint (host)
+      const envInfo = $('#envInfo'); if(envInfo) envInfo.textContent = location.host + ' • v2';
 
-    const updateTokenStatus = () => {
-      const present = !!getToken();
-      $('#tokenStatus').textContent = present ? 'Token saved in this browser (localStorage).' : 'No token saved.';
-    };
+      // Token handling
+      const TOKEN_KEY = 'pp_admin_token';
+      const getToken = () => gt(TOKEN_KEY) || '';
+      const setToken = (t) => st(TOKEN_KEY, t);
 
-    $('#saveToken').onclick = () => { const v=$('#token').value.trim(); if(!v){ toast('Enter a token first', false); return; } setToken(v); updateTokenStatus(); toast('Token saved'); };
-    $('#clearToken').onclick = () => { localStorage.removeItem(TOKEN_KEY); updateTokenStatus(); toast('Token cleared'); };
+      const updateTokenStatus = () => {
+        const present = !!getToken();
+        const el = $('#tokenStatus'); if(!el) return;
+        el.textContent = present ? 'Token saved in this browser (localStorage).' : 'No token saved.';
+      };
 
-    // API fetch with Authorization header, fallback to query param
-    async function apiFetch(path, opts={}){
-      const token = getToken();
-      if(!token) throw new Error('Missing ADMIN_API_TOKEN — paste and Save first.');
-      const headers = Object.assign({ 'Authorization': 'Bearer ' + token }, opts.headers || {});
-      const init = Object.assign({}, opts, { headers });
-      let res = await fetch(path, init);
-      if(res.status === 401 || res.status === 403){
-        // Fallback to query token for compatibility
-        const url = new URL(path, location.origin);
-        url.searchParams.set('token', token);
-        res = await fetch(url.toString(), Object.assign({}, opts, { headers: Object.assign({}, opts.headers || {}) }));
+      const btnSave = $('#saveToken');
+      const btnClear = $('#clearToken');
+      const btnRefresh = $('#refreshDrafts');
+
+      if(btnSave) btnSave.addEventListener('click', ()=>{
+        try{
+          const inp = $('#token');
+          const v = (inp && inp.value ? inp.value.trim() : '');
+          if(!v){ toast('Enter a token first', false); return; }
+          setToken(v);
+          updateTokenStatus();
+          toast('Token saved');
+        }catch(e){ showFatal(e.message||e); }
+      });
+      if(btnClear) btnClear.addEventListener('click', ()=>{ try{ localStorage.removeItem(TOKEN_KEY); updateTokenStatus(); toast('Token cleared'); }catch(e){ showFatal(e.message||e); } });
+
+      // API fetch with Authorization header, fallback to query param
+      async function apiFetch(path, opts={}){
+        const token = getToken();
+        if(!token) throw new Error('Missing ADMIN_API_TOKEN — paste and Save first.');
+        const headers = new Headers(opts.headers || {});
+        headers.set('Authorization','Bearer ' + token);
+        const init = Object.assign({}, opts, { headers });
+        let res = await fetch(path, init);
+        if(res.status === 401 || res.status === 403){
+          const url = new URL(path, location.origin);
+          url.searchParams.set('token', token);
+          res = await fetch(url.toString(), Object.assign({}, opts));
+        }
+        if(!res.ok){
+          const t = await res.text();
+          throw new Error('HTTP ' + res.status + ' — ' + t);
+        }
+        const ct = res.headers.get('content-type')||'';
+        return ct.includes('application/json') ? res.json() : res.text();
       }
-      if(!res.ok){
-        const t = await res.text();
-        throw new Error('HTTP ' + res.status + ' — ' + t);
+
+      // Drafts
+      async function loadDrafts(){
+        if(btnRefresh) btnRefresh.disabled = true;
+        try{
+          const data = await apiFetch('/api/admin-drafts?limit=50');
+          const items = data.items || data || [];
+          renderDrafts(items);
+          const count = document.getElementById('count'); if(count) count.textContent = `(${items.length} shown)`;
+          const raw = document.getElementById('raw'); if(raw) raw.textContent = JSON.stringify(data, null, 2);
+          toast('Drafts loaded');
+        }catch(e){ console.error(e); toast('Failed to load drafts: ' + e.message, false); }
+        finally{ if(btnRefresh) btnRefresh.disabled = false; }
       }
-      const ct = res.headers.get('content-type')||'';
-      return ct.includes('application/json') ? res.json() : res.text();
-    }
 
-    // Drafts
-    let lastRaw = null;
-
-    async function loadDrafts(){
-      $('#refreshDrafts').disabled = true;
-      try{
-        const data = await apiFetch('/api/admin-drafts?limit=50');
-        lastRaw = data;
-        const items = data.items || data || [];
-        renderDrafts(items);
-        $('#count').textContent = `(${items.length} shown)`;
-        $('#raw').textContent = JSON.stringify(data, null, 2);
-        toast('Drafts loaded');
-      }catch(e){
-        console.error(e);
-        toast('Failed to load drafts: ' + e.message, false);
-      }finally{
-        $('#refreshDrafts').disabled = false;
+      function cell(title, inner, classes=''){
+        return `<td class="${classes}" title="${esc(title||'')}">${inner}</td>`;
       }
-    }
 
-    function cell(title, inner, classes=''){
-      return `<td class="${classes}" title="${esc(title||'')}">${inner}</td>`;
-    }
-
-    function renderDrafts(items){
-      if(!Array.isArray(items)) items = [];
-      if(items.length === 0){ $('#tableWrap').innerHTML = '<p class="muted">No drafts yet.</p>'; return; }
-      const cols = ['id','status','created_at','from_wa','text_body','caption_seed','media_path','media_mime','approved_at'];
-      let html = '<table><thead><tr>' + cols.map(c=>`<th>${esc(c)}</th>`).join('') + '<th>Actions</th></tr></thead><tbody>';
-      for(const it of items){
-        const id = Number(it.id)||'';
-        const mpath = it.media_path || it.media?.storage_path || '';
-        const status = it.status || 'draft';
-        const isApproved = status.toLowerCase() === 'approved';
-        html += '<tr>'
-          + `<td class="mono">${esc(id)}</td>`
-          + `<td>${isApproved ? '<span class="pill" style="border-color:#274a31;color:#7bf5a3">approved</span>' : '<span class="pill">draft</span>'}</td>`
-          + cell(it.created_at, esc(htime(it.created_at)), 'small')
-          + cell(it.from_wa, `<span class="mono small ellipsis">${esc(it.from_wa||'')}</span>`, '')
-          + cell(it.text_body, `<span class="small wraptxt">${esc(it.text_body||'')}</span>`, '')
-          + cell(it.caption_seed, `<span class="small wraptxt">${esc(it.caption_seed||'')}</span>`, '')
-          + cell(mpath, `<span class="mono small breakall">${esc(mpath)}</span>`, '')
-          + cell(it.media_mime, `<span class="small">${esc(it.media_mime||'')}</span>`, '')
-          + cell(it.approved_at, esc(htime(it.approved_at)), 'small')
-          + `<td class="actions">`
-            + `<button onclick="approve(${id}, this)" ${isApproved ? 'disabled': ''}>${isApproved ? 'Approved' : 'Approve'}</button>`
-            + `<button class="secondary" onclick="sendPreview(${id}, this)">Send preview</button>`
-            + (mpath ? `<button class="ghost" onclick="openMedia('${encodeURIComponent(mpath)}', this)">Open media</button>` : '')
-          + `</td>`
-        + '</tr>';
+      function renderDrafts(items){
+        if(!Array.isArray(items)) items = [];
+        const wrap = document.getElementById('tableWrap');
+        if(items.length === 0){ if(wrap) wrap.innerHTML = '<p class="muted">No drafts yet.</p>'; return; }
+        const cols = ['id','status','created_at','from_wa','text_body','caption_seed','media_path','media_mime','approved_at'];
+        let html = '<table><thead><tr>' + cols.map(c=>`<th>${esc(c)}</th>`).join('') + '<th>Actions</th></tr></thead><tbody>';
+        for(const it of items){
+          const id = Number(it.id)||'';
+          const mpath = it.media_path || (it.media && it.media.storage_path) || '';
+          const status = (it.status||'draft').toLowerCase();
+          const isApproved = status === 'approved';
+          html += '<tr>'
+            + `<td class="mono">${esc(id)}</td>`
+            + `<td>${isApproved ? '<span class="pill" style="border-color:#274a31;color:#7bf5a3">approved</span>' : '<span class="pill">draft</span>'}</td>`
+            + cell(it.created_at, esc(htime(it.created_at)), 'small')
+            + cell(it.from_wa, `<span class=\"mono small ellipsis\">${esc(it.from_wa||'')}</span>`, '')
+            + cell(it.text_body, `<span class=\"small wraptxt\">${esc(it.text_body||'')}</span>`, '')
+            + cell(it.caption_seed, `<span class=\"small wraptxt\">${esc(it.caption_seed||'')}</span>`, '')
+            + cell(mpath, `<span class=\"mono small breakall\">${esc(mpath)}</span>`, '')
+            + cell(it.media_mime, `<span class=\"small\">${esc(it.media_mime||'')}</span>`, '')
+            + cell(it.approved_at, esc(htime(it.approved_at)), 'small')
+            + `<td class=\"actions\">`
+              + (id ? `<button onclick=\"approve(${id}, this)\" ${isApproved ? 'disabled':''}>${isApproved ? 'Approved':'Approve'}</button>` : '')
+              + (id ? `<button class=\"secondary\" onclick=\"sendPreview(${id}, this)\">Send preview</button>` : '')
+              + (mpath ? `<button class=\"ghost\" onclick=\"openMedia('${encodeURIComponent(mpath)}')\">Open media</button>` : '')
+            + `</td>`
+          + '</tr>';
+        }
+        html += '</tbody></table>';
+        if(wrap) wrap.innerHTML = html;
       }
-      html += '</tbody></table>';
-      $('#tableWrap').innerHTML = html;
-    }
 
-    // Actions
-    async function approve(id, btn){
-      if(!id) return toast('Missing id', false);
-      if(btn) btn.disabled = true;
-      try{
-        await apiFetch('/api/admin-approve?id=' + encodeURIComponent(id));
-        toast('Approved #' + id);
-        await loadDrafts();
-      }catch(e){ toast('Approve failed: ' + e.message, false); }
-      finally{ if(btn) btn.disabled = false; }
-    }
+      // Actions
+      window.approve = async function(id, btn){
+        if(!id) return toast('Missing id', false);
+        if(btn) btn.disabled = true;
+        try{ await apiFetch('/api/admin-approve?id=' + encodeURIComponent(id)); toast('Approved #' + id); await loadDrafts(); }
+        catch(e){ toast('Approve failed: ' + e.message, false); }
+        finally{ if(btn) btn.disabled = false; }
+      }
 
-    async function sendPreview(id, btn){
-      if(!id) return toast('Missing id', false);
-      if(btn) btn.disabled = true;
-      try{
-        await apiFetch('/api/admin-send-preview?id=' + encodeURIComponent(id));
-        toast('Preview sent for #' + id);
-      }catch(e){ toast('Preview failed: ' + e.message + '
-If code 190/463, refresh WA token in Vercel env.', false); }
-      finally{ if(btn) btn.disabled = false; }
-    }
+      window.sendPreview = async function(id, btn){
+        if(!id) return toast('Missing id', false);
+        if(btn) btn.disabled = true;
+        try{ await apiFetch('/api/admin-send-preview?id=' + encodeURIComponent(id)); toast('Preview sent for #' + id); }
+        catch(e){ toast('Preview failed: ' + e.message + '\\nIf code 190/463, refresh WA token in Vercel env.', false); }
+        finally{ if(btn) btn.disabled = false; }
+      }
 
-    async function openMedia(storagePathEnc){
-      const path = decodeURIComponent(storagePathEnc);
-      try{
-        const data = await apiFetch('/api/admin-media-url?path=' + encodeURIComponent(path));
-        const url = (typeof data === 'string') ? data : (data.url || data.signed_url || '');
-        if(!url) throw new Error('No URL in response');
-        window.open(url, '_blank');
-      }catch(e){ toast('Open media failed: ' + e.message, false); }
-    }
+      window.openMedia = async function(storagePathEnc){
+        const path = decodeURIComponent(storagePathEnc);
+        try{
+          const data = await apiFetch('/api/admin-media-url?path=' + encodeURIComponent(path));
+          const url = (typeof data === 'string') ? data : (data.url || data.signed_url || '');
+          if(!url) throw new Error('No URL in response');
+          window.open(url, '_blank');
+        }catch(e){ toast('Open media failed: ' + e.message, false); }
+      }
 
-    // Raw toggle
-    $('#showRaw').onclick = () => {
-      const el = $('#raw');
-      el.style.display = el.style.display === 'none' ? 'block' : 'none';
-    };
+      // Raw toggle
+      const btnRaw = document.getElementById('showRaw');
+      if(btnRaw) btnRaw.addEventListener('click', ()=>{
+        const el = document.getElementById('raw');
+        if(!el) return; el.style.display = el.style.display === 'none' ? 'block' : 'none';
+      });
 
-    // Init
-    (function init(){
+      // Init
       updateTokenStatus();
       const saved = getToken();
-      if(saved){ $('#token').value = saved; loadDrafts(); }
-      $('#refreshDrafts').onclick = loadDrafts;
+      const tokenInput = document.getElementById('token');
+      if(saved && tokenInput){ tokenInput.value = saved; }
+      if(btnRefresh) btnRefresh.addEventListener('click', loadDrafts);
     })();
   </script>
 </body>
