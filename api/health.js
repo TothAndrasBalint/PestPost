@@ -1,8 +1,6 @@
-function handler(req, res) {
-  res.statusCode = 200;
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.end(JSON.stringify({ ok: true, env: process.env.APP_ENV || 'unknown' }));
+export function GET() {
+  const env = process.env.APP_ENV || 'unknown';
+  return new Response(JSON.stringify({ ok: true, env }), {
+    headers: { 'content-type': 'application/json; charset=utf-8' }
+  });
 }
-module.exports = handler;
-module.exports.default = handler;
-exports.default = handler;
