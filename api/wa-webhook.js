@@ -4,7 +4,7 @@ import { saveWaMediaById } from '../lib/wa-media.js';
 
 const VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN || 'abc';
 
-// Outbound (for optional auto-reply)
+// Outbound (optional auto-reply)
 const PHONE_ID = process.env.WA_PHONE_NUMBER_ID;
 const TOKEN = process.env.WA_ACCESS_TOKEN;
 const AUTO_REPLY = process.env.AUTO_REPLY === '1';
@@ -30,7 +30,7 @@ function verifySignature(rawBody, header, secret) {
   }
 }
 
-// Extract core fields + media_id (if present)
+// Extract core fields, media_id, and text (or caption)
 function parseWaEvent(envelope) {
   try {
     const entry = envelope?.entry?.[0];
@@ -42,17 +42,30 @@ function parseWaEvent(envelope) {
     const wa_message_id = msg?.id || null;
     const event_type = msg?.type || null;
 
-    // media id for common types
     let media_id = null;
-    if (event_type === 'image') media_id = msg?.image?.id || null;
-    else if (event_type === 'document') media_id = msg?.document?.id || null;
-    else if (event_type === 'audio') media_id = msg?.audio?.id || null;
-    else if (event_type === 'video') media_id = msg?.video?.id || null;
-    else if (event_type === 'sticker') media_id = msg?.sticker?.id || null;
+    let text_body = null;
 
-    return { wa_message_id, from_wa, event_type, media_id };
+    if (event_type === 'text') {
+      text_body = msg?.text?.body ?? null;
+    } else if (event_type === 'image') {
+      media_id = msg?.image?.id || null;
+      text_body = msg?.image?.caption ?? null;
+    } else if (event_type === 'document') {
+      media_id = msg?.document?.id || null;
+      // some docs can carry caption too:
+      text_body = msg?.document?.caption ?? null;
+    } else if (event_type === 'audio') {
+      media_id = msg?.audio?.id || null;
+    } else if (event_type === 'video') {
+      media_id = msg?.video?.id || null;
+      text_body = msg?.video?.caption ?? null;
+    } else if (event_type === 'sticker') {
+      media_id = msg?.sticker?.id || null;
+    }
+
+    return { wa_message_id, from_wa, event_type, media_id, text_body };
   } catch {
-    return { wa_message_id: null, from_wa: null, event_type: null, media_id: null };
+    return { wa_message_id: null, from_wa: null, event_type: null, media_id: null, text_body: null };
   }
 }
 
@@ -117,10 +130,10 @@ export async function POST(request) {
     });
   }
 
-  // 4) normalize a few fields (now includes media_id)
-  const { wa_message_id, from_wa, event_type, media_id } = parseWaEvent(body);
+  // 4) normalize fields (now includes media_id + text_body)
+  const { wa_message_id, from_wa, event_type, media_id, text_body } = parseWaEvent(body);
 
-  // 5) idempotent insert into Supabase (events table)
+  // 5) idempotent insert into Supabase (events log)
   if (supabaseAdmin) {
     const { error } = await supabaseAdmin
       .from('events')
@@ -133,18 +146,23 @@ export async function POST(request) {
     console.warn('Supabase env not set; skipping DB insert.');
   }
 
-  // 6) if there is media, fetch & upload to Supabase Storage, then write path+mime
+  // Keep track of saved media for draft creation
+  let savedPath = null;
+  let savedMime = null;
+
+  // 6) if media present: fetch & upload → update events row with media path/mime
   if (media_id) {
     try {
       const { path, mime } = await saveWaMediaById(media_id, wa_message_id);
+      savedPath = path;
+      savedMime = mime;
       console.log('Media saved:', { wa_message_id, media_id, path, mime });
-  
+
       if (supabaseAdmin && wa_message_id) {
         const { error: upErr } = await supabaseAdmin
           .from('events')
           .update({ media_path: path, media_mime: mime })
           .eq('wa_message_id', wa_message_id);
-  
         if (upErr) console.error('Supabase update (media_path) error:', upErr);
       }
     } catch (e) {
@@ -152,7 +170,26 @@ export async function POST(request) {
     }
   }
 
-  // 7) optional auto-reply
+  // 7) create/ensure a draft_post (idempotent on source_message_id)
+  if (supabaseAdmin && wa_message_id) {
+    const draft = {
+      source_message_id: wa_message_id,
+      from_wa: from_wa || null,
+      text_body: text_body || null,
+      media_path: savedPath || null,
+      media_mime: savedMime || null,
+      status: 'draft'
+    };
+
+    const { error: draftErr } = await supabaseAdmin
+      .from('draft_posts')
+      .upsert(draft, { onConflict: 'source_message_id', ignoreDuplicates: true });
+
+    if (draftErr) console.error('Supabase upsert (draft_posts) error:', draftErr);
+    else console.log('Draft created:', { source_message_id: wa_message_id });
+  }
+
+  // 8) optional auto-reply
   if (AUTO_REPLY && from_wa && event_type === 'text' && PHONE_ID && TOKEN) {
     try {
       await sendWaText(from_wa, 'PestPost: köszi, megjött 👌 / thanks, received 👌');
@@ -161,7 +198,7 @@ export async function POST(request) {
     }
   }
 
-  // 8) ack to Meta
+  // 9) ack to Meta
   return new Response(JSON.stringify({ ok: true }), {
     headers: { 'content-type': 'application/json; charset=utf-8' }
   });
