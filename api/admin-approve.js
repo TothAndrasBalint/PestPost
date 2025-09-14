@@ -5,12 +5,8 @@ const TOKEN = process.env.ADMIN_API_TOKEN;
 
 // Accepts GET ?token=...&id=123  OR  ?token=...&source=wamid....
 // (POST with JSON { id } or { source } also supported.)
-export async function GET(request) {
-  return handle(request);
-}
-export async function POST(request) {
-  return handle(request);
-}
+export async function GET(request) { return handle(request); }
+export async function POST(request) { return handle(request); }
 
 async function handle(request) {
   const url = new URL(request.url);
@@ -20,9 +16,7 @@ async function handle(request) {
   const bearer = hdr.toLowerCase().startsWith('bearer ') ? hdr.slice(7) : null;
   const qtok = url.searchParams.get('token');
   const provided = bearer || qtok || '';
-  if (!TOKEN || provided !== TOKEN) {
-    return json({ ok: false, error: 'unauthorized' }, 401);
-  }
+  if (!TOKEN || provided !== TOKEN) return json({ ok: false, error: 'unauthorized' }, 401);
 
   // --- input ---
   let id = url.searchParams.get('id');
@@ -36,32 +30,36 @@ async function handle(request) {
     } catch {}
   }
 
-  if (!id && !source) {
-    return json({ ok: false, error: 'missing id or source' }, 400);
-  }
-
+  if (!id && !source) return json({ ok: false, error: 'missing id or source' }, 400);
   if (!supabaseAdmin) return json({ ok: false, error: 'no_db' }, 500);
 
-  // --- find row ---
+  // --- find the draft ---
   let query = supabaseAdmin.from('draft_posts').select('*').limit(1);
   if (id) query = query.eq('id', Number(id));
   else query = query.eq('source_message_id', source);
 
   const { data: rows, error: selErr } = await query;
   if (selErr) return json({ ok: false, error: selErr.message }, 500);
+
   const row = rows?.[0];
   if (!row) return json({ ok: false, error: 'not_found' }, 404);
+
+  // If already approved, return as-is (don’t overwrite timestamps/captions)
   if (row.status === 'approved') return json({ ok: true, already: true, item: row });
 
-  // --- update status ---
-  let upd = supabaseAdmin.from('draft_posts').update({ status: 'approved' });
+  // --- build updates: status + (first-time) caption_seed + approved_at ---
+  const updates = { status: 'approved' };
+  if (!row.caption_seed) updates.caption_seed = row.text_body || null;
+  if (!row.approved_at) updates.approved_at = new Date().toISOString();
+
+  let upd = supabaseAdmin.from('draft_posts').update(updates);
   if (id) upd = upd.eq('id', Number(id));
   else upd = upd.eq('source_message_id', source);
 
   const { error: updErr } = await upd;
   if (updErr) return json({ ok: false, error: updErr.message }, 500);
 
-  // return fresh row
+  // return refreshed row
   const { data: after } = await supabaseAdmin
     .from('draft_posts')
     .select('*')
