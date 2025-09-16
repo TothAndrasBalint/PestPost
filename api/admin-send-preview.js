@@ -14,8 +14,9 @@ function json(body, status = 200) {
 
 // GET ?token=...&id=123  OR  ?token=...&source=wamid....
 // Sends either:
-//  - text-only: caption_seed
-//  - image+caption: signed URL of media_path + caption_seed
+//  - text-only: caption
+//  - image+caption: signed URL of media_path + caption
+// Then sends a second message with interactive buttons for approval.
 export async function GET(req) { return handle(req); }
 export async function POST(req) { return handle(req); }
 
@@ -55,6 +56,9 @@ async function handle(request) {
   const to = (draft.from_wa || '').trim();
   if (!to) return json({ ok: false, error: 'missing_to_number' }, 400);
 
+  // Prefer final caption if available, then seed, then text body
+  const caption = draft.caption_final || draft.caption_seed || draft.text_body || 'Preview';
+
   // --- if media exists, create a signed URL for a few minutes
   let mediaSignedUrl = null;
   if (draft.media_path) {
@@ -65,27 +69,23 @@ async function handle(request) {
     mediaSignedUrl = data?.signedUrl || null;
   }
 
-  // --- send to WhatsApp
+  // --- send to WhatsApp (message 1: media or text) ---
   const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
-  let payload;
 
-  // Prefer rich preview (image + caption); fall back to text-only
+  let payload;
   if (mediaSignedUrl) {
     payload = {
       messaging_product: 'whatsapp',
       to,
       type: 'image',
-      image: {
-        link: mediaSignedUrl,
-        caption: draft.caption_seed || draft.text_body || 'Preview'
-      }
+      image: { link: mediaSignedUrl, caption }
     };
   } else {
     payload = {
       messaging_product: 'whatsapp',
       to,
       type: 'text',
-      text: { preview_url: false, body: draft.caption_seed || draft.text_body || 'Preview' }
+      text: { preview_url: false, body: caption }
     };
   }
 
@@ -103,5 +103,48 @@ async function handle(request) {
     return json({ ok: false, error: data }, 500);
   }
 
-  return json({ ok: true, to, kind: payload.type, data });
+  // --- send to WhatsApp (message 2: interactive buttons) ---
+  // Note: WA non-template interactive buttons cannot be combined with media; must be a separate message.
+  const buttonsPayload = {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'interactive',
+    interactive: {
+      type: 'button',
+      body: { text: 'Approve this post, or request edits.' },
+      action: {
+        buttons: [
+          { type: 'reply', reply: { id: `approve:${draft.id}`,      title: 'Approve ✅' } },
+          { type: 'reply', reply: { id: `request_edit:${draft.id}`, title: 'Request edit ✍️' } }
+        ]
+      }
+    }
+  };
+
+  let buttonsOk = true;
+  let buttonsResp = null;
+  try {
+    const res2 = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${WA_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(buttonsPayload)
+    });
+    buttonsResp = await res2.json();
+    if (!res2.ok) buttonsOk = false;
+  } catch (e) {
+    buttonsOk = false;
+    buttonsResp = { error: String(e?.message || e) };
+  }
+
+  return json({
+    ok: true,
+    to,
+    kind: payload.type,
+    data,                    // first message response
+    buttons_ok: buttonsOk,   // true/false
+    buttons: buttonsResp     // second message response or error info
+  });
 }
