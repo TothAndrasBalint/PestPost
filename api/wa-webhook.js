@@ -147,39 +147,88 @@ export async function POST(request) {
     });
   }
 
-  // 3.5) STATUS callbacks (sent/delivered/read/failed) — log them and ACK early
-  // These arrive after you send a preview; they do NOT have value.messages[0].id,
-  // but they DO have value.statuses[].id (the message id the status refers to).
+  // STATUS callbacks (sent/delivered/read/failed)
   {
     const entries = Array.isArray(body?.entry) ? body.entry : [];
-    let sawStatus = false;
-  
+    let handledOnlyStatuses = true;
     for (const entry of entries) {
       const changes = Array.isArray(entry?.changes) ? entry.changes : [];
       for (const change of changes) {
-        const statuses = change?.value?.statuses;
+        const value = change?.value;
+        const statuses = value?.statuses;
+        const messages = value?.messages;
+  
+        // If there are inbound messages too, this is not "only statuses"
+        if (Array.isArray(messages) && messages.length) handledOnlyStatuses = false;
+  
         if (Array.isArray(statuses) && statuses.length) {
-          sawStatus = true;
           for (const s of statuses) {
-            // Safe upsert (uses your helper)
+            // Always log the status
             await recordEvent(supabaseAdmin, {
-              wa_message_id: s.id,                  // message id referenced by this status
-              from_wa: s.recipient_id || null,      // number we sent to
-              event_type: `status:${s.status}`,     // e.g. status:sent | status:delivered
+              wa_message_id: s.id,                 // id of the message the status refers to
+              from_wa: s.recipient_id || null,
+              event_type: `status:${s.status}`,
               raw: s
             });
+  
+            // On first 'sent' or 'delivered' for our preview image, send the buttons as a reply
+            if ((s.status === 'sent' || s.status === 'delivered') && s.id) {
+              const { data: d } = await supabaseAdmin
+                .from('draft_posts')
+                .select('id, from_wa, preview_buttons_sent_at')
+                .eq('preview_message_id', s.id)
+                .single();
+  
+              if (d && !d.preview_buttons_sent_at && d.from_wa && process.env.WA_ACCESS_TOKEN && process.env.WA_PHONE_NUMBER_ID) {
+                // Build interactive buttons that reply to the image message
+                const buttonsPayload = {
+                  messaging_product: 'whatsapp',
+                  to: d.from_wa,
+                  type: 'interactive',
+                  context: { message_id: s.id }, // reply to the image → renders under it
+                  interactive: {
+                    type: 'button',
+                    body: { text: 'Approve this post, or request edits.' },
+                    action: {
+                      buttons: [
+                        { type: 'reply', reply: { id: `approve:${d.id}`,      title: 'Approve ✅' } },
+                        { type: 'reply', reply: { id: `request_edit:${d.id}`, title: 'Request edit ✍️' } }
+                      ]
+                    }
+                  }
+                };
+  
+                try {
+                  await fetch(`https://graph.facebook.com/v20.0/${process.env.WA_PHONE_NUMBER_ID}/messages`, {
+                    method: 'POST',
+                    headers: {
+                      'Authorization': `Bearer ${process.env.WA_ACCESS_TOKEN}`,
+                      'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(buttonsPayload)
+                  });
+                  await supabaseAdmin
+                    .from('draft_posts')
+                    .update({ preview_buttons_sent_at: new Date().toISOString() })
+                    .eq('id', d.id);
+                } catch (e) {
+                  console.error('send buttons failed:', e?.message || e);
+                }
+              }
+            }
           }
         }
       }
     }
   
-    // If this webhook batch only contained statuses, we can ACK now.
-    if (sawStatus) {
+    // If this webhook batch contained only statuses, ACK now.
+    if (handledOnlyStatuses) {
       return new Response(JSON.stringify({ ok: true, kind: 'status' }), {
         headers: { 'content-type': 'application/json; charset=utf-8' }
       });
     }
   }
+
 
   // 4) normalize fields (now includes media_id + text_body)
   const { wa_message_id, from_wa, event_type, media_id, text_body } = parseWaEvent(body);
