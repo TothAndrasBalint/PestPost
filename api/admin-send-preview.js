@@ -132,27 +132,33 @@ async function handle(request) {
   let buttonsOk = true;
   let buttonsResp = null;
   try {
-    const res2 = await fetch(endpoint, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${WA_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(buttonsPayload)
-    });
-    buttonsResp = await res2.json();
-    if (!res2.ok) buttonsOk = false;
-  } catch (e) {
-    buttonsOk = false;
-    buttonsResp = { error: String(e?.message || e) };
-  }
-
-  return json({
-    ok: true,
-    to,
-    kind: payload.type,
-    data,                    // first message response
-    buttons_ok: buttonsOk,   // true/false
-    buttons: buttonsResp     // second message response or error info
+    const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${WA_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(payload)
   });
-}
+  
+  const data = await res.json();
+  if (!res.ok) {
+    return json({ ok: false, error: data }, 500);
+  }
+  
+  // Grab WA message id of the media/text we just sent
+  const previewMsgId = Array.isArray(data?.messages) ? data.messages[0]?.id : null;
+  
+  // Persist the message id — buttons will be sent from the webhook on status callback
+  if (previewMsgId) {
+    await supabaseAdmin
+      .from('draft_posts')
+      .update({
+        preview_message_id: previewMsgId,
+        // optional: mark that a preview was (re)sent
+        status: draft.status || 'draft'
+      })
+      .eq('id', draft.id);
+  }
+  
+  return json({ ok: true, to, kind: payload.type, data, preview_message_id: previewMsgId });
