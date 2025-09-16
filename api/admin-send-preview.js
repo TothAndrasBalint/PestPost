@@ -103,6 +103,12 @@ async function handle(request) {
     return json({ ok: false, error: data }, 500);
   }
 
+  // Ensure buttons follow the media/text message in the UI
+  const firstMsgId = Array.isArray(data?.messages) ? data.messages[0]?.id : null;
+  
+  // Small delay helps ordering on some clients/networks
+  await new Promise(r => setTimeout(r, 700));
+
   // --- send to WhatsApp (message 2: interactive buttons) ---
   // Note: WA non-template interactive buttons cannot be combined with media; must be a separate message.
   const buttonsPayload = {
