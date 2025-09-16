@@ -4,6 +4,23 @@ import { saveWaMediaById } from '../lib/wa-media.js';
 
 const VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN || 'abc';
 
+async function recordEvent(supabase, row) {
+  // Guard against bad rows
+  if (!row || !row.wa_message_id) {
+    console.warn('events: skip insert (missing wa_message_id)');
+    return;
+  }
+  const { error } = await supabase
+    .from('events')
+    .upsert({
+      wa_message_id: row.wa_message_id,  // UNIQUE idempotency
+      from_wa: row.from_wa || null,
+      event_type: row.event_type || null,
+      raw: row.raw ?? null
+    });
+  if (error) console.error('events upsert error:', error);
+}
+
 // Outbound (optional auto-reply)
 const PHONE_ID = process.env.WA_PHONE_NUMBER_ID;
 const TOKEN = process.env.WA_ACCESS_TOKEN;
