@@ -115,6 +115,8 @@ async function handle(request) {
     messaging_product: 'whatsapp',
     to,
     type: 'interactive',
+    // Reply to the first message so it stacks underneath
+    context: firstMsgId ? { message_id: firstMsgId } : undefined,
     interactive: {
       type: 'button',
       body: { text: 'Approve this post, or request edits.' },
