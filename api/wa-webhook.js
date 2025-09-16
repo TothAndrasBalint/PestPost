@@ -147,18 +147,57 @@ export async function POST(request) {
     });
   }
 
+  // 3.5) STATUS callbacks (sent/delivered/read/failed) — log them and ACK early
+  // These arrive after you send a preview; they do NOT have value.messages[0].id,
+  // but they DO have value.statuses[].id (the message id the status refers to).
+  {
+    const entries = Array.isArray(body?.entry) ? body.entry : [];
+    let sawStatus = false;
+  
+    for (const entry of entries) {
+      const changes = Array.isArray(entry?.changes) ? entry.changes : [];
+      for (const change of changes) {
+        const statuses = change?.value?.statuses;
+        if (Array.isArray(statuses) && statuses.length) {
+          sawStatus = true;
+          for (const s of statuses) {
+            // Safe upsert (uses your helper)
+            await recordEvent(supabaseAdmin, {
+              wa_message_id: s.id,                  // message id referenced by this status
+              from_wa: s.recipient_id || null,      // number we sent to
+              event_type: `status:${s.status}`,     // e.g. status:sent | status:delivered
+              raw: s
+            });
+          }
+        }
+      }
+    }
+  
+    // If this webhook batch only contained statuses, we can ACK now.
+    if (sawStatus) {
+      return new Response(JSON.stringify({ ok: true, kind: 'status' }), {
+        headers: { 'content-type': 'application/json; charset=utf-8' }
+      });
+    }
+  }
+
   // 4) normalize fields (now includes media_id + text_body)
   const { wa_message_id, from_wa, event_type, media_id, text_body } = parseWaEvent(body);
 
-  // 5) idempotent insert into Supabase (events log)
+  // 5) idempotent insert into Supabase (events log) — only if we have a message id
   if (supabaseAdmin) {
-    const { error } = await supabaseAdmin
-      .from('events')
-      .upsert(
-        { wa_message_id, from_wa, event_type, raw: body },
-        { onConflict: 'wa_message_id', ignoreDuplicates: true }
-      );
-    if (error) console.error('Supabase upsert error:', error);
+    if (wa_message_id) {
+      const { error } = await supabaseAdmin
+        .from('events')
+        .upsert(
+          { wa_message_id, from_wa, event_type, raw: body },
+          { onConflict: 'wa_message_id', ignoreDuplicates: true }
+        );
+      if (error) console.error('Supabase upsert error:', error);
+    } else {
+      // No message id → could be other webhook shapes, but we already handled statuses above.
+      console.warn('events: skip insert (no wa_message_id on this payload)');
+    }
   } else {
     console.warn('Supabase env not set; skipping DB insert.');
   }
