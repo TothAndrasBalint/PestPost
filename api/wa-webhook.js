@@ -1,11 +1,12 @@
+// /api/wa-webhook.js
 import crypto from 'node:crypto';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { saveWaMediaById } from '../lib/wa-media.js';
 
 const VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN || 'abc';
 
+// ---- events helper (safe, idempotent) ----
 async function recordEvent(supabase, row) {
-  // Guard against bad rows
   if (!row || !row.wa_message_id) {
     console.warn('events: skip insert (missing wa_message_id)');
     return;
@@ -21,12 +22,12 @@ async function recordEvent(supabase, row) {
   if (error) console.error('events upsert error:', error);
 }
 
-// Outbound (optional auto-reply)
+// ---- Outbound (optional auto-reply) ----
 const PHONE_ID = process.env.WA_PHONE_NUMBER_ID;
 const TOKEN = process.env.WA_ACCESS_TOKEN;
 const AUTO_REPLY = process.env.AUTO_REPLY === '1';
 
-// HMAC verify of X-Hub-Signature-256
+// ---- Security: HMAC verify of X-Hub-Signature-256 ----
 function verifySignature(rawBody, header, secret) {
   if (!header || !secret) return false;
   const [scheme, sigHex] = String(header).split('=');
@@ -47,7 +48,7 @@ function verifySignature(rawBody, header, secret) {
   }
 }
 
-// Extract core fields, media_id, and text (or caption)
+// ---- Extract core fields, media_id, and text (or caption) ----
 function parseWaEvent(envelope) {
   try {
     const entry = envelope?.entry?.[0];
@@ -69,7 +70,6 @@ function parseWaEvent(envelope) {
       text_body = msg?.image?.caption ?? null;
     } else if (event_type === 'document') {
       media_id = msg?.document?.id || null;
-      // some docs can carry caption too:
       text_body = msg?.document?.caption ?? null;
     } else if (event_type === 'audio') {
       media_id = msg?.audio?.id || null;
@@ -86,7 +86,7 @@ function parseWaEvent(envelope) {
   }
 }
 
-// Tiny helper to send a text back
+// ---- Tiny helper to send a text back ----
 async function sendWaText(to, body) {
   const res = await fetch(`https://graph.facebook.com/v20.0/${PHONE_ID}/messages`, {
     method: 'POST',
@@ -147,20 +147,21 @@ export async function POST(request) {
     });
   }
 
-  // STATUS callbacks (sent/delivered/read/failed)
+  // 3.5) STATUS callbacks (sent/delivered/read/failed)
   {
     const entries = Array.isArray(body?.entry) ? body.entry : [];
     let handledOnlyStatuses = true;
+
     for (const entry of entries) {
       const changes = Array.isArray(entry?.changes) ? entry.changes : [];
       for (const change of changes) {
         const value = change?.value;
         const statuses = value?.statuses;
         const messages = value?.messages;
-  
-        // If there are inbound messages too, this is not "only statuses"
+
+        // If there are inbound messages too, not only statuses
         if (Array.isArray(messages) && messages.length) handledOnlyStatuses = false;
-  
+
         if (Array.isArray(statuses) && statuses.length) {
           for (const s of statuses) {
             // Always log the status
@@ -170,7 +171,7 @@ export async function POST(request) {
               event_type: `status:${s.status}`,
               raw: s
             });
-  
+
             // On first 'sent' or 'delivered' for our preview image, send the buttons as a reply
             if ((s.status === 'sent' || s.status === 'delivered') && s.id) {
               const { data: d } = await supabaseAdmin
@@ -178,9 +179,8 @@ export async function POST(request) {
                 .select('id, from_wa, preview_buttons_sent_at')
                 .eq('preview_message_id', s.id)
                 .single();
-  
+
               if (d && !d.preview_buttons_sent_at && d.from_wa && process.env.WA_ACCESS_TOKEN && process.env.WA_PHONE_NUMBER_ID) {
-                // Build interactive buttons that reply to the image message
                 const buttonsPayload = {
                   messaging_product: 'whatsapp',
                   to: d.from_wa,
@@ -197,7 +197,7 @@ export async function POST(request) {
                     }
                   }
                 };
-  
+
                 try {
                   await fetch(`https://graph.facebook.com/v20.0/${process.env.WA_PHONE_NUMBER_ID}/messages`, {
                     method: 'POST',
@@ -220,7 +220,7 @@ export async function POST(request) {
         }
       }
     }
-  
+
     // If this webhook batch contained only statuses, ACK now.
     if (handledOnlyStatuses) {
       return new Response(JSON.stringify({ ok: true, kind: 'status' }), {
@@ -228,7 +228,6 @@ export async function POST(request) {
       });
     }
   }
-
 
   // 4) normalize fields (now includes media_id + text_body)
   const { wa_message_id, from_wa, event_type, media_id, text_body } = parseWaEvent(body);
@@ -244,7 +243,6 @@ export async function POST(request) {
         );
       if (error) console.error('Supabase upsert error:', error);
     } else {
-      // No message id → could be other webhook shapes, but we already handled statuses above.
       console.warn('events: skip insert (no wa_message_id on this payload)');
     }
   } else {
