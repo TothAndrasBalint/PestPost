@@ -86,7 +86,7 @@ function parseWaEvent(envelope) {
       media_id = msg?.sticker?.id || null;
     } else if (event_type === 'interactive') { // NEW
       if (msg?.interactive?.type === 'button_reply') {
-        // e.g., "approve:123"
+        // e.g., "approve:123" or "request_edit:123"
         interactive_id = msg?.interactive?.button_reply?.id || null;
       }
     }
@@ -236,6 +236,21 @@ export async function POST(request) {
       }
     }
     return new Response(JSON.stringify({ ok: true, kind: 'interactive:approve' }), {
+      headers: { 'content-type': 'application/json; charset=utf-8' }
+    });
+  }
+
+  // --- Handle Request edit button (interactive.button_reply) and exit early ---
+  if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('request_edit:')) {
+    if (from_wa && PHONE_ID && TOKEN) {
+      try {
+        await sendWaText(
+          from_wa,
+          "Okay ✍️ — what should I tweak (image or caption)? You can just say the change (e.g., brighter image, shorter text, mention opening hours) and I’ll resend."
+        );
+      } catch {}
+    }
+    return new Response(JSON.stringify({ ok: true, kind: 'interactive:request_edit' }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
   }
