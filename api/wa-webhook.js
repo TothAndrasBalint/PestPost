@@ -242,6 +242,21 @@ export async function POST(request) {
 
   // --- Handle Request edit button (interactive.button_reply) and exit early ---
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('request_edit:')) {
+    // Mark this draft as awaiting an edit message from the user
+    const idStr = interactive_id.split(':')[1];
+    const draftId = Number(idStr);
+    if (Number.isFinite(draftId) && supabaseAdmin) {
+      try {
+        await supabaseAdmin
+          .from('draft_posts')
+          .update({ awaiting_edit: true })
+          .eq('id', draftId);
+      } catch (e) {
+        console.error('set awaiting_edit failed:', e?.message || e);
+      }
+    }
+  
+    // Prompt the user for what to tweak
     if (from_wa && PHONE_ID && TOKEN) {
       try {
         await sendWaText(
@@ -250,11 +265,14 @@ export async function POST(request) {
         );
       } catch {}
     }
+  
     return new Response(JSON.stringify({ ok: true, kind: 'interactive:request_edit' }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
   }
 
+  
+  
   // Keep track of saved media for draft creation
   let savedPath = null;
   let savedMime = null;
