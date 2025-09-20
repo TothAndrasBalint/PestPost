@@ -162,6 +162,18 @@ export async function POST(request) {
     });
   }
 
+  // DEBUG (remove after test): see what type comes in when tapping Approve
+  const dbgMsg = body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0] ?? null;
+  console.log('[WA-INCOMING]', {
+    type: dbgMsg?.type,
+    interactive_type: dbgMsg?.interactive?.type,
+    button_reply_id: dbgMsg?.interactive?.button_reply?.id,
+    // some WA versions use a different shape:
+    button_text: dbgMsg?.button?.text,
+    button_payload: dbgMsg?.button?.payload,
+  });
+
+
   // 3.5) STATUS callbacks (sent/delivered/read/failed) — log them and ACK early
   // These arrive after you send a preview; they do NOT have value.messages[0].id,
   // but they DO have value.statuses[].id (the message id the status refers to).
