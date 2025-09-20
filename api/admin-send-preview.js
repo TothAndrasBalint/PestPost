@@ -107,7 +107,7 @@ async function handle(request) {
   const firstMsgId = Array.isArray(data?.messages) ? data.messages[0]?.id : null;
   
   // Small delay helps ordering on some clients/networks
-  await new Promise(r => setTimeout(r, 1200));
+  await new Promise(r => setTimeout(r, 3500));
 
   // --- send to WhatsApp (message 2: interactive buttons) ---
   // Note: WA non-template interactive buttons cannot be combined with media; must be a separate message.
