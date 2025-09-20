@@ -61,6 +61,15 @@ function parseWaEvent(envelope) {
 
     let media_id = null;
     let text_body = null;
+    let interactive_id = null; // NEW
+
+    if (event_type === 'text') {
+      text_body = msg?.text?.body ?? null;
+
+
+    if (event_type === 'text') {
+      text_body = msg?.text?.body ?? null;
+
 
     if (event_type === 'text') {
       text_body = msg?.text?.body ?? null;
@@ -78,11 +87,17 @@ function parseWaEvent(envelope) {
       text_body = msg?.video?.caption ?? null;
     } else if (event_type === 'sticker') {
       media_id = msg?.sticker?.id || null;
+    } else if (event_type === 'interactive') {
+      if (msg?.interactive?.type === 'button_reply') {
+        // e.g., "approve:123"
+        interactive_id = msg?.interactive?.button_reply?.id || null;
+      }
     }
 
-    return { wa_message_id, from_wa, event_type, media_id, text_body };
+
+    return { wa_message_id, from_wa, event_type, media_id, text_body, interactive_id };
   } catch {
-    return { wa_message_id: null, from_wa: null, event_type: null, media_id: null, text_body: null };
+    return { wa_message_id: null, from_wa: null, event_type: null, media_id: null, text_body: null, interactive_id: null };
   }
 }
 
@@ -182,7 +197,7 @@ export async function POST(request) {
   }
 
   // 4) normalize fields (now includes media_id + text_body)
-  const { wa_message_id, from_wa, event_type, media_id, text_body } = parseWaEvent(body);
+  const { wa_message_id, from_wa, event_type, media_id, text_body, interactive_id } = parseWaEvent(body);
 
   // 5) idempotent insert into Supabase (events log) — only if we have a message id
   if (supabaseAdmin) {
@@ -200,6 +215,26 @@ export async function POST(request) {
     }
   } else {
     console.warn('Supabase env not set; skipping DB insert.');
+  }
+
+  // --- Handle Approve button (interactive.button_reply) and exit early ---
+  if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('approve:')) {
+    const idStr = interactive_id.split(':')[1];
+    const draftId = Number(idStr);
+    if (Number.isFinite(draftId) && supabaseAdmin) {
+      await supabaseAdmin
+        .from('draft_posts')
+        .update({ status: 'approved', approved_at: new Date().toISOString() })
+        .eq('id', draftId);
+
+      // polite ACK back to the user (best-effort)
+      if (from_wa && PHONE_ID && TOKEN) {
+        try { await sendWaText(from_wa, 'Approved - thanks!'); } catch {}
+      }
+    }
+    return new Response(JSON.stringify({ ok: true, kind: 'interactive:approve' }), {
+      headers: { 'content-type': 'application/json; charset=utf-8' }
+    });
   }
 
   // Keep track of saved media for draft creation
