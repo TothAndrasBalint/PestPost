@@ -226,21 +226,56 @@ export async function POST(request) {
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('approve:')) {
     const idStr = interactive_id.split(':')[1];
     const draftId = Number(idStr);
+  
     if (Number.isFinite(draftId) && supabaseAdmin) {
+      // 1) mark approved
       await supabaseAdmin
         .from('draft_posts')
         .update({ status: 'approved', approved_at: new Date().toISOString() })
         .eq('id', draftId);
-
-      // polite ACK back to the user (best-effort)
+  
+      // 2) thank-you text
       if (from_wa && PHONE_ID && TOKEN) {
         try { await sendWaText(from_wa, 'Approved ✅ — thanks!'); } catch {}
       }
+  
+      // 3) after a short pause, show scheduling options (display only; no DB writes yet)
+      if (from_wa && PHONE_ID && TOKEN) {
+        try {
+          await sleep(1200);
+          const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
+          const schedButtons = {
+            messaging_product: 'whatsapp',
+            to: from_wa,
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: { text: 'When should I schedule it?' },
+              action: {
+                buttons: [
+                  { type: 'reply', reply: { id: `postnow:${draftId}`, title: 'Post now' } },
+                  { type: 'reply', reply: { id: `tonight:${draftId}`, title: 'Tonight (19–21)' } },
+                  { type: 'reply', reply: { id: `aisched:${draftId}`, title: 'Let AI schedule' } }
+                ]
+              }
+            }
+          };
+          await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(schedButtons)
+          });
+        } catch (e) {
+          console.error('send scheduling buttons failed:', e?.message || e);
+        }
+      }
     }
+  
     return new Response(JSON.stringify({ ok: true, kind: 'interactive:approve' }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
   }
+
 
   // --- Handle Request edit button (interactive.button_reply) and exit early ---
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('request_edit:')) {
