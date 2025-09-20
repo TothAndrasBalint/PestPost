@@ -244,11 +244,21 @@ export async function POST(request) {
 
   // --- Handle Request edit button (interactive.button_reply) and exit early ---
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('request_edit:')) {
-    // Mark this draft as awaiting an edit message from the user
     const idStr = interactive_id.split(':')[1];
     const draftId = Number(idStr);
+  
     if (Number.isFinite(draftId) && supabaseAdmin) {
       try {
+        // Ensure only ONE awaiting_edit per user: clear any previous flags for this number
+        if (from_wa) {
+          await supabaseAdmin
+            .from('draft_posts')
+            .update({ awaiting_edit: false })
+            .eq('from_wa', from_wa)
+            .eq('awaiting_edit', true);
+        }
+  
+        // Mark THIS draft as awaiting an edit message from the user
         await supabaseAdmin
           .from('draft_posts')
           .update({ awaiting_edit: true })
@@ -257,7 +267,7 @@ export async function POST(request) {
         console.error('set awaiting_edit failed:', e?.message || e);
       }
     }
-
+  
     // Prompt the user for what to tweak
     if (from_wa && PHONE_ID && TOKEN) {
       try {
@@ -267,11 +277,12 @@ export async function POST(request) {
         );
       } catch {}
     }
-
+  
     return new Response(JSON.stringify({ ok: true, kind: 'interactive:request_edit' }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
   }
+
 
   // --- Consume next text when awaiting_edit is true (placeholder variant flow) ---
   if (event_type === 'text' && from_wa && text_body && supabaseAdmin) {
