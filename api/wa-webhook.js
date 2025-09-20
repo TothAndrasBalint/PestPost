@@ -226,54 +226,61 @@ export async function POST(request) {
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('approve:')) {
     const idStr = interactive_id.split(':')[1];
     const draftId = Number(idStr);
-
+  
     if (Number.isFinite(draftId) && supabaseAdmin) {
-      // 1) mark approved
-      await supabaseAdmin
+      // Update only if NOT already approved; return the row if it changed
+      const { data: updated, error: upErr } = await supabaseAdmin
         .from('draft_posts')
         .update({ status: 'approved', approved_at: new Date().toISOString() })
-        .eq('id', draftId);
-
-      // 2) thank-you text
-      if (from_wa && PHONE_ID && TOKEN) {
-        try { await sendWaText(from_wa, 'Approved ✅ — thanks!'); } catch {}
-      }
-
-      // 3) after a short pause, show scheduling options (two buttons)
-      if (from_wa && PHONE_ID && TOKEN) {
-        try {
-          await sleep(1200);
-          const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
-          const schedButtons = {
-            messaging_product: 'whatsapp',
-            to: from_wa,
-            type: 'interactive',
-            interactive: {
-              type: 'button',
-              body: { text: 'When should I schedule it?' },
-              action: {
-                buttons: [
-                  { type: 'reply', reply: { id: `postnow:${draftId}`, title: 'Post now' } },
-                  { type: 'reply', reply: { id: `aisched:${draftId}`, title: 'Let AI schedule' } }
-                ]
+        .eq('id', draftId)
+        .neq('status', 'approved')          // idempotency guard
+        .select('id')
+        .maybeSingle();
+  
+      if (upErr) {
+        console.error('approve update failed:', upErr);
+      } else if (updated) {
+        // We actually approved it just now — send thank-you + scheduling buttons
+        if (from_wa && PHONE_ID && TOKEN) {
+          try { await sendWaText(from_wa, 'Approved ✅ — thanks!'); } catch {}
+          try {
+            await sleep(1200);
+            const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
+            const schedButtons = {
+              messaging_product: 'whatsapp',
+              to: from_wa,
+              type: 'interactive',
+              interactive: {
+                type: 'button',
+                body: { text: 'When should I schedule it?' },
+                action: {
+                  buttons: [
+                    { type: 'reply', reply: { id: `postnow:${draftId}`, title: 'Post now' } },
+                    { type: 'reply', reply: { id: `aisched:${draftId}`, title: 'Let AI schedule' } }
+                  ]
+                }
               }
-            }
-          };
-          await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify(schedButtons)
-          });
-        } catch (e) {
-          console.error('send scheduling buttons failed:', e?.message || e);
+            };
+            await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(schedButtons)
+            });
+          } catch (e) {
+            console.error('send scheduling buttons failed:', e?.message || e);
+          }
         }
+      } else {
+        // Already approved earlier — do nothing (prevents duplicate messages)
+        console.log('approve: already approved, skipping messages', { draftId });
       }
     }
-
+  
     return new Response(JSON.stringify({ ok: true, kind: 'interactive:approve' }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
   }
+
 
   // --- Handle Post now (scheduling) ---
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('postnow:')) {
