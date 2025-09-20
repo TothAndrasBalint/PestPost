@@ -86,7 +86,7 @@ function parseWaEvent(envelope) {
       media_id = msg?.sticker?.id || null;
     } else if (event_type === 'interactive') { // NEW
       if (msg?.interactive?.type === 'button_reply') {
-        // e.g., "approve:123" or "request_edit:123"
+        // e.g., "approve:123", "request_edit:123", "postnow:123", "aisched:123"
         interactive_id = msg?.interactive?.button_reply?.id || null;
       }
     }
@@ -128,7 +128,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // -------- routes --------
 
-export async function GET(request) {
+export async function GET(request)) {
   const url = new URL(request.url);
   const mode = url.searchParams.get('hub.mode');
   const token = url.searchParams.get('hub.verify_token');
@@ -226,20 +226,20 @@ export async function POST(request) {
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('approve:')) {
     const idStr = interactive_id.split(':')[1];
     const draftId = Number(idStr);
-  
+
     if (Number.isFinite(draftId) && supabaseAdmin) {
       // 1) mark approved
       await supabaseAdmin
         .from('draft_posts')
         .update({ status: 'approved', approved_at: new Date().toISOString() })
         .eq('id', draftId);
-  
+
       // 2) thank-you text
       if (from_wa && PHONE_ID && TOKEN) {
         try { await sendWaText(from_wa, 'Approved ✅ — thanks!'); } catch {}
       }
-  
-      // 3) after a short pause, show scheduling options (display only; no DB writes yet)
+
+      // 3) after a short pause, show scheduling options (two buttons)
       if (from_wa && PHONE_ID && TOKEN) {
         try {
           await sleep(1200);
@@ -254,7 +254,6 @@ export async function POST(request) {
               action: {
                 buttons: [
                   { type: 'reply', reply: { id: `postnow:${draftId}`, title: 'Post now' } },
-                  { type: 'reply', reply: { id: `tonight:${draftId}`, title: 'Tonight (19–21)' } },
                   { type: 'reply', reply: { id: `aisched:${draftId}`, title: 'Let AI schedule' } }
                 ]
               }
@@ -270,18 +269,73 @@ export async function POST(request) {
         }
       }
     }
-  
+
     return new Response(JSON.stringify({ ok: true, kind: 'interactive:approve' }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
   }
 
+  // --- Handle Post now (scheduling) ---
+  if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('postnow:')) {
+    const idStr = interactive_id.split(':')[1];
+    const draftId = Number(idStr);
+
+    if (Number.isFinite(draftId) && supabaseAdmin) {
+      try {
+        await supabaseAdmin
+          .from('draft_posts')
+          .update({
+            schedule_strategy: 'now',
+            scheduled_at: new Date().toISOString()
+          })
+          .eq('id', draftId);
+
+        if (from_wa && PHONE_ID && TOKEN) {
+          try { await sendWaText(from_wa, 'Queued now. 📥'); } catch {}
+        }
+      } catch (e) {
+        console.error('postnow update failed:', e?.message || e);
+      }
+    }
+
+    return new Response(JSON.stringify({ ok: true, kind: 'schedule:now' }), {
+      headers: { 'content-type': 'application/json; charset=utf-8' }
+    });
+  }
+
+  // --- Handle Let AI schedule (scheduling) ---
+  if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('aisched:')) {
+    const idStr = interactive_id.split(':')[1];
+    const draftId = Number(idStr);
+
+    if (Number.isFinite(draftId) && supabaseAdmin) {
+      try {
+        await supabaseAdmin
+          .from('draft_posts')
+          .update({
+            schedule_strategy: 'ai',
+            scheduled_at: null // to be set by your AI scheduler later
+          })
+          .eq('id', draftId);
+
+        if (from_wa && PHONE_ID && TOKEN) {
+          try { await sendWaText(from_wa, 'Okay — I’ll queue this for AI scheduling. 🤖'); } catch {}
+        }
+      } catch (e) {
+        console.error('aisched update failed:', e?.message || e);
+      }
+    }
+
+    return new Response(JSON.stringify({ ok: true, kind: 'schedule:ai' }), {
+      headers: { 'content-type': 'application/json; charset=utf-8' }
+    });
+  }
 
   // --- Handle Request edit button (interactive.button_reply) and exit early ---
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('request_edit:')) {
     const idStr = interactive_id.split(':')[1];
     const draftId = Number(idStr);
-  
+
     if (Number.isFinite(draftId) && supabaseAdmin) {
       try {
         // Ensure only ONE awaiting_edit per user: clear any previous flags for this number
@@ -292,7 +346,7 @@ export async function POST(request) {
             .eq('from_wa', from_wa)
             .eq('awaiting_edit', true);
         }
-  
+
         // Mark THIS draft as awaiting an edit message from the user
         await supabaseAdmin
           .from('draft_posts')
@@ -302,7 +356,7 @@ export async function POST(request) {
         console.error('set awaiting_edit failed:', e?.message || e);
       }
     }
-  
+
     // Prompt the user for what to tweak
     if (from_wa && PHONE_ID && TOKEN) {
       try {
@@ -312,12 +366,11 @@ export async function POST(request) {
         );
       } catch {}
     }
-  
+
     return new Response(JSON.stringify({ ok: true, kind: 'interactive:request_edit' }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
   }
-
 
   // --- Consume next text when awaiting_edit is true (placeholder variant flow) ---
   if (event_type === 'text' && from_wa && text_body && supabaseAdmin) {
@@ -365,7 +418,7 @@ export async function POST(request) {
           let firstMsgId = null;
           if (inserted.media_path) {
             // sign a private URL for 5 minutes
-            const { data: signed, error: signErr } = await supabaseAdmin
+            const { data: signed } = await supabaseAdmin
               .storage.from('media')
               .createSignedUrl(inserted.media_path, 300);
             const link = signed?.signedUrl || null;
