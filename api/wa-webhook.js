@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { saveWaMediaById } from '../lib/wa-media.js';
+import { generateCaptionAndTags } from '../lib/generate.js'; // NEW: AI caption generator
 
 const VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN || 'abc';
 
@@ -379,7 +380,7 @@ export async function POST(request) {
     });
   }
 
-  // --- Consume next text when awaiting_edit is true (placeholder variant flow) ---
+  // --- Consume next text when awaiting_edit is true (AI caption placeholder flow) ---
   if (event_type === 'text' && from_wa && text_body && supabaseAdmin) {
     // find the most recent draft marked awaiting_edit for this number
     const { data: awaitingRows, error: awaitingErr } = await supabaseAdmin
@@ -402,7 +403,7 @@ export async function POST(request) {
       const newDraft = {
         source_message_id: wa_message_id,     // current text message
         from_wa,
-        text_body,
+        text_body,                            // DB keeps raw user text for now
         media_path: parent.media_path || null,
         media_mime: parent.media_mime || null,
         status: 'draft'
@@ -417,6 +418,20 @@ export async function POST(request) {
       if (draftErr) {
         console.error('create placeholder variant failed:', draftErr);
       } else if (PHONE_ID && TOKEN) {
+        // Build the preview caption using AI (safe fallback to user text)
+        let previewCaption = text_body;
+        try {
+          const { caption_final, hashtags } = await generateCaptionAndTags({
+            seedText: text_body,
+            constraints: {},     // real constraints later
+            clientPrefs: {}      // read from clients later
+          });
+          const tagLine = (hashtags && hashtags.length) ? '\n\n' + hashtags.join(' ') : '';
+          previewCaption = (caption_final || text_body) + tagLine;
+        } catch (e) {
+          console.error('AI caption generation failed, using user text:', e?.message || e);
+        }
+
         // send preview (image+caption if media, else text), then buttons tied to it
         try {
           const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
@@ -435,13 +450,13 @@ export async function POST(request) {
                   messaging_product: 'whatsapp',
                   to: from_wa,
                   type: 'image',
-                  image: { link, caption: text_body }
+                  image: { link, caption: previewCaption } // <-- uses AI caption
                 }
               : {
                   messaging_product: 'whatsapp',
                   to: from_wa,
                   type: 'text',
-                  text: { preview_url: false, body: text_body }
+                  text: { preview_url: false, body: previewCaption } // <-- uses AI caption
                 };
 
             const res1 = await fetch(endpoint, {
@@ -461,7 +476,7 @@ export async function POST(request) {
               messaging_product: 'whatsapp',
               to: from_wa,
               type: 'text',
-              text: { preview_url: false, body: text_body }
+              text: { preview_url: false, body: previewCaption } // <-- uses AI caption
             };
             const res1 = await fetch(endpoint, {
               method: 'POST',
