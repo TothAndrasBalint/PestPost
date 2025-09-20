@@ -104,7 +104,7 @@ function parseWaEvent(envelope) {
   }
 }
 
-// Tiny helper to send a text back
+// Tiny helpers
 async function sendWaText(to, body) {
   const res = await fetch(`https://graph.facebook.com/v20.0/${PHONE_ID}/messages`, {
     method: 'POST',
@@ -123,6 +123,8 @@ async function sendWaText(to, body) {
   if (!res.ok) throw new Error(JSON.stringify(data));
   return data;
 }
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // -------- routes --------
 
@@ -255,7 +257,7 @@ export async function POST(request) {
         console.error('set awaiting_edit failed:', e?.message || e);
       }
     }
-  
+
     // Prompt the user for what to tweak
     if (from_wa && PHONE_ID && TOKEN) {
       try {
@@ -265,14 +267,149 @@ export async function POST(request) {
         );
       } catch {}
     }
-  
+
     return new Response(JSON.stringify({ ok: true, kind: 'interactive:request_edit' }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
   }
 
-  
-  
+  // --- Consume next text when awaiting_edit is true (placeholder variant flow) ---
+  if (event_type === 'text' && from_wa && text_body && supabaseAdmin) {
+    // find the most recent draft marked awaiting_edit for this number
+    const { data: awaitingRows, error: awaitingErr } = await supabaseAdmin
+      .from('draft_posts')
+      .select('*')
+      .eq('from_wa', from_wa)
+      .eq('awaiting_edit', true)
+      .order('id', { ascending: false })
+      .limit(1);
+
+    if (!awaitingErr && awaitingRows && awaitingRows.length) {
+      const parent = awaitingRows[0];
+
+      // clear awaiting flag on parent (best-effort)
+      try {
+        await supabaseAdmin.from('draft_posts').update({ awaiting_edit: false }).eq('id', parent.id);
+      } catch {}
+
+      // create a new draft (placeholder variant): reuse image, set caption to user's text
+      const newDraft = {
+        source_message_id: wa_message_id,     // current text message
+        from_wa,
+        text_body,
+        media_path: parent.media_path || null,
+        media_mime: parent.media_mime || null,
+        status: 'draft'
+      };
+
+      const { data: inserted, error: draftErr } = await supabaseAdmin
+        .from('draft_posts')
+        .upsert(newDraft, { onConflict: 'source_message_id' })
+        .select()
+        .single();
+
+      if (draftErr) {
+        console.error('create placeholder variant failed:', draftErr);
+      } else if (PHONE_ID && TOKEN) {
+        // send preview (image+caption if media, else text), then buttons tied to it
+        try {
+          const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
+
+          // First message: media or text
+          let firstMsgId = null;
+          if (inserted.media_path) {
+            // sign a private URL for 5 minutes
+            const { data: signed, error: signErr } = await supabaseAdmin
+              .storage.from('media')
+              .createSignedUrl(inserted.media_path, 300);
+            const link = signed?.signedUrl || null;
+
+            const payload1 = link
+              ? {
+                  messaging_product: 'whatsapp',
+                  to: from_wa,
+                  type: 'image',
+                  image: { link, caption: text_body }
+                }
+              : {
+                  messaging_product: 'whatsapp',
+                  to: from_wa,
+                  type: 'text',
+                  text: { preview_url: false, body: text_body }
+                };
+
+            const res1 = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload1)
+            });
+            const j1 = await res1.json();
+            if (res1.ok && Array.isArray(j1?.messages)) {
+              firstMsgId = j1.messages[0]?.id || null;
+            } else {
+              console.error('send preview failed:', j1);
+            }
+          } else {
+            // text-only preview
+            const payload1 = {
+              messaging_product: 'whatsapp',
+              to: from_wa,
+              type: 'text',
+              text: { preview_url: false, body: text_body }
+            };
+            const res1 = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload1)
+            });
+            const j1 = await res1.json();
+            if (res1.ok && Array.isArray(j1?.messages)) {
+              firstMsgId = j1.messages[0]?.id || null;
+            } else {
+              console.error('send text preview failed:', j1);
+            }
+          }
+
+          // wait so the image lands first
+          await sleep(3500);
+
+          // Second message: buttons (tie to the first message via context if available)
+          const buttons = {
+            messaging_product: 'whatsapp',
+            to: from_wa,
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: { text: 'Approve this post, or request edits.' },
+              action: {
+                buttons: [
+                  { type: 'reply', reply: { id: `approve:${inserted.id}`,      title: 'Approve ✅' } },
+                  { type: 'reply', reply: { id: `request_edit:${inserted.id}`, title: 'Request edit ✍️' } }
+                ]
+              }
+            }
+          };
+          if (firstMsgId) buttons.context = { message_id: firstMsgId };
+
+          const res2 = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(buttons)
+          });
+          const j2 = await res2.json();
+          if (!res2.ok) console.error('send buttons failed:', j2);
+        } catch (e) {
+          console.error('preview+buttons send error:', e?.message || e);
+        }
+      }
+
+      // ACK and exit (do not run the normal draft creation below)
+      return new Response(JSON.stringify({ ok: true, kind: 'edit_captured' }), {
+        headers: { 'content-type': 'application/json; charset=utf-8' }
+      });
+    }
+  }
+
   // Keep track of saved media for draft creation
   let savedPath = null;
   let savedMime = null;
