@@ -17,7 +17,7 @@ async function recordEvent(supabase, row) {
       from_wa: row.from_wa || null,
       event_type: row.event_type || null,
       raw: row.raw ?? null
-    });
+    }, { onConflict: 'wa_message_id' });
   if (error) console.error('events upsert error:', error);
 }
 
