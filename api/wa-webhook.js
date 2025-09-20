@@ -4,6 +4,13 @@ import { saveWaMediaById } from '../lib/wa-media.js';
 
 const VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN || 'abc';
 
+// Outbound (optional auto-reply)
+const PHONE_ID = process.env.WA_PHONE_NUMBER_ID;
+const TOKEN = process.env.WA_ACCESS_TOKEN;
+const AUTO_REPLY = process.env.AUTO_REPLY === '1';
+
+// -------- helpers --------
+
 async function recordEvent(supabase, row) {
   // Guard against bad rows
   if (!row || !row.wa_message_id) {
@@ -12,19 +19,17 @@ async function recordEvent(supabase, row) {
   }
   const { error } = await supabase
     .from('events')
-    .upsert({
-      wa_message_id: row.wa_message_id,  // UNIQUE idempotency
-      from_wa: row.from_wa || null,
-      event_type: row.event_type || null,
-      raw: row.raw ?? null
-    }, { onConflict: 'wa_message_id' });
+    .upsert(
+      {
+        wa_message_id: row.wa_message_id,  // UNIQUE idempotency
+        from_wa: row.from_wa || null,
+        event_type: row.event_type || null,
+        raw: row.raw ?? null
+      },
+      { onConflict: 'wa_message_id', ignoreDuplicates: true }
+    );
   if (error) console.error('events upsert error:', error);
 }
-
-// Outbound (optional auto-reply)
-const PHONE_ID = process.env.WA_PHONE_NUMBER_ID;
-const TOKEN = process.env.WA_ACCESS_TOKEN;
-const AUTO_REPLY = process.env.AUTO_REPLY === '1';
 
 // HMAC verify of X-Hub-Signature-256
 function verifySignature(rawBody, header, secret) {
@@ -48,6 +53,7 @@ function verifySignature(rawBody, header, secret) {
 }
 
 // Extract core fields, media_id, and text (or caption)
+// NOW also supports interactive.button_reply (returns interactive_id)
 function parseWaEvent(envelope) {
   try {
     const entry = envelope?.entry?.[0];
@@ -65,20 +71,11 @@ function parseWaEvent(envelope) {
 
     if (event_type === 'text') {
       text_body = msg?.text?.body ?? null;
-
-
-    if (event_type === 'text') {
-      text_body = msg?.text?.body ?? null;
-
-
-    if (event_type === 'text') {
-      text_body = msg?.text?.body ?? null;
     } else if (event_type === 'image') {
       media_id = msg?.image?.id || null;
       text_body = msg?.image?.caption ?? null;
     } else if (event_type === 'document') {
       media_id = msg?.document?.id || null;
-      // some docs can carry caption too:
       text_body = msg?.document?.caption ?? null;
     } else if (event_type === 'audio') {
       media_id = msg?.audio?.id || null;
@@ -87,17 +84,23 @@ function parseWaEvent(envelope) {
       text_body = msg?.video?.caption ?? null;
     } else if (event_type === 'sticker') {
       media_id = msg?.sticker?.id || null;
-    } else if (event_type === 'interactive') {
+    } else if (event_type === 'interactive') { // NEW
       if (msg?.interactive?.type === 'button_reply') {
         // e.g., "approve:123"
         interactive_id = msg?.interactive?.button_reply?.id || null;
       }
     }
 
-
     return { wa_message_id, from_wa, event_type, media_id, text_body, interactive_id };
   } catch {
-    return { wa_message_id: null, from_wa: null, event_type: null, media_id: null, text_body: null, interactive_id: null };
+    return {
+      wa_message_id: null,
+      from_wa: null,
+      event_type: null,
+      media_id: null,
+      text_body: null,
+      interactive_id: null
+    };
   }
 }
 
@@ -120,6 +123,8 @@ async function sendWaText(to, body) {
   if (!res.ok) throw new Error(JSON.stringify(data));
   return data;
 }
+
+// -------- routes --------
 
 export async function GET(request) {
   const url = new URL(request.url);
@@ -162,25 +167,13 @@ export async function POST(request) {
     });
   }
 
-  // DEBUG (remove after test): see what type comes in when tapping Approve
-  const dbgMsg = body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0] ?? null;
-  console.log('[WA-INCOMING]', {
-    type: dbgMsg?.type,
-    interactive_type: dbgMsg?.interactive?.type,
-    button_reply_id: dbgMsg?.interactive?.button_reply?.id,
-    // some WA versions use a different shape:
-    button_text: dbgMsg?.button?.text,
-    button_payload: dbgMsg?.button?.payload,
-  });
-
-
   // 3.5) STATUS callbacks (sent/delivered/read/failed) — log them and ACK early
   // These arrive after you send a preview; they do NOT have value.messages[0].id,
   // but they DO have value.statuses[].id (the message id the status refers to).
   {
     const entries = Array.isArray(body?.entry) ? body.entry : [];
     let sawStatus = false;
-  
+
     for (const entry of entries) {
       const changes = Array.isArray(entry?.changes) ? entry.changes : [];
       for (const change of changes) {
@@ -188,7 +181,6 @@ export async function POST(request) {
         if (Array.isArray(statuses) && statuses.length) {
           sawStatus = true;
           for (const s of statuses) {
-            // Safe upsert (uses your helper)
             await recordEvent(supabaseAdmin, {
               wa_message_id: s.id,                  // message id referenced by this status
               from_wa: s.recipient_id || null,      // number we sent to
@@ -199,8 +191,7 @@ export async function POST(request) {
         }
       }
     }
-  
-    // If this webhook batch only contained statuses, we can ACK now.
+
     if (sawStatus) {
       return new Response(JSON.stringify({ ok: true, kind: 'status' }), {
         headers: { 'content-type': 'application/json; charset=utf-8' }
@@ -208,7 +199,7 @@ export async function POST(request) {
     }
   }
 
-  // 4) normalize fields (now includes media_id + text_body)
+  // 4) normalize fields (now includes media_id + text_body + interactive_id)
   const { wa_message_id, from_wa, event_type, media_id, text_body, interactive_id } = parseWaEvent(body);
 
   // 5) idempotent insert into Supabase (events log) — only if we have a message id
@@ -241,7 +232,7 @@ export async function POST(request) {
 
       // polite ACK back to the user (best-effort)
       if (from_wa && PHONE_ID && TOKEN) {
-        try { await sendWaText(from_wa, 'Approved - thanks!'); } catch {}
+        try { await sendWaText(from_wa, 'Approved ✅ — thanks!'); } catch {}
       }
     }
     return new Response(JSON.stringify({ ok: true, kind: 'interactive:approve' }), {
