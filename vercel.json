@@ -1,6 +1,5 @@
 {
-  "crons": [{ 
-    "path": "/api/cron-orchestrator",
-    "schedule": "*/10 * * * *" 
-  }]
+  "crons": [
+    { "path": "/api/cron-orchestrator", "schedule": "*/10 * * * *" }
+  ]
 }
