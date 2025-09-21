@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { supabaseAdmin } from '../lib/supabase.js';
 import { saveWaMediaById } from '../lib/wa-media.js';
 import { generateCaptionAndTags } from '../lib/generate.js'; // NEW: AI caption generator
+import { parseConstraints } from '../lib/constraints.js';
 
 const VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN || 'abc';
 
@@ -418,19 +419,21 @@ export async function POST(request) {
       if (draftErr) {
         console.error('create placeholder variant failed:', draftErr);
       } else if (PHONE_ID && TOKEN) {
-        // Build the preview caption using AI (safe fallback to user text)
+        // Build the preview caption using AI, using user steering constraints
         let previewCaption = text_body;
         try {
+          const constraints = parseConstraints(text_body);
           const { caption_final, hashtags } = await generateCaptionAndTags({
             seedText: text_body,
-            constraints: {},     // real constraints later
-            clientPrefs: {}      // read from clients later
+            constraints,
+            clientPrefs: {} // keep as-is for now
           });
           const tagLine = (hashtags && hashtags.length) ? '\n\n' + hashtags.join(' ') : '';
           previewCaption = (caption_final || text_body) + tagLine;
         } catch (e) {
           console.error('AI caption generation failed, using user text:', e?.message || e);
         }
+
 
         // send preview (image+caption if media, else text), then buttons tied to it
         try {
