@@ -419,20 +419,27 @@ export async function POST(request) {
       if (draftErr) {
         console.error('create placeholder variant failed:', draftErr);
       } else if (PHONE_ID && TOKEN) {
-        // Build the preview caption using AI, using user steering constraints
+        // Build the preview caption using AI, keeping original context + the new steering
         let previewCaption = text_body;
         try {
           const constraints = parseConstraints(text_body);
+        
+          // 👇 NEW: include parent caption so we don't lose context (e.g., "river cruise")
+          const seed = parent?.text_body
+            ? `${parent.text_body}\n\nEdit request: ${text_body}`
+            : text_body;
+        
           const { caption_final, hashtags } = await generateCaptionAndTags({
-            seedText: text_body,
+            seedText: seed,
             constraints,
-            clientPrefs: {} // keep as-is for now
+            clientPrefs: {}
           });
           const tagLine = (hashtags && hashtags.length) ? '\n\n' + hashtags.join(' ') : '';
           previewCaption = (caption_final || text_body) + tagLine;
         } catch (e) {
           console.error('AI caption generation failed, using user text:', e?.message || e);
         }
+
 
 
         // send preview (image+caption if media, else text), then buttons tied to it
