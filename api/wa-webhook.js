@@ -381,8 +381,9 @@ export async function POST(request) {
     });
   }
 
-  } else if (buttonId?.startsWith('dontlike:')) {
-    const idStr = buttonId.split(':')[1];
+  // --- Handle Don’t like (interactive.button_reply) ---
+  if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('dontlike:')) {
+    const idStr = interactive_id.split(':')[1];
     const parentId = Number(idStr);
     if (!Number.isFinite(parentId)) {
       return new Response(JSON.stringify({ ok: false, error: 'bad_dontlike_id' }), {
@@ -777,7 +778,7 @@ export async function POST(request) {
               action: {
                 buttons: [
                   { type: 'reply', reply: { id: `approve:${insertedVariant.id}`,      title: 'Approve ✅' } },
-                  { type: 'reply', reply: { id: `request_edit:${insertedVariant.id}`, title: 'Request edit ✍️' } }
+                  { type: 'reply', reply: { id: `request_edit:${insertedVariant.id}`, title: 'Request edit ✍️' } },
                   { type: 'reply', reply: { id: `dontlike:${insertedVariant.id}`, title: 'Don’t like 👎' } }
                 ]
               }
