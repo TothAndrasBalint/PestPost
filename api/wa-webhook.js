@@ -356,15 +356,47 @@ export async function POST(request) {
             .eq('awaiting_edit', true);
         }
 
-        // Mark THIS draft as awaiting an edit message from the user
-        await supabaseAdmin
-          .from('draft_posts')
-          .update({ awaiting_edit: true })
-          .eq('id', draftId);
-      } catch (e) {
-        console.error('set awaiting_edit failed:', e?.message || e);
-      }
-    }
+        // Mark THIS draft as awaiting an edit message from the user (verify it sticks)
+        let flaggedOk = false;
+        try {
+          const { data: flagged, error: flagErr } = await supabaseAdmin
+            .from('draft_posts')
+            .update({ awaiting_edit: true })
+            .eq('id', draftId)
+            .eq('from_wa', from_wa)     // ensure the draft belongs to this WA number
+            .select()
+            .single();
+        
+          if (!flagErr && flagged) flaggedOk = true;
+        } catch (e) {
+          console.error('awaiting_edit flag set failed:', e?.message || e);
+        }
+        
+        if (!flaggedOk && from_wa) {
+          // Fallback: flag the most recent draft for this number
+          try {
+            const { data: latest, error: lErr } = await supabaseAdmin
+              .from('draft_posts')
+              .select('id')
+              .eq('from_wa', from_wa)
+              .order('id', { ascending: false })
+              .limit(1);
+        
+            const latestId = Array.isArray(latest) && latest.length ? latest[0].id : null;
+            if (latestId) {
+              await supabaseAdmin
+                .from('draft_posts')
+                .update({ awaiting_edit: true })
+                .eq('id', latestId);
+              flaggedOk = true;
+            } else {
+              console.error('awaiting_edit fallback: no latest draft found for', from_wa);
+            }
+          } catch (e) {
+            console.error('awaiting_edit fallback failed:', e?.message || e);
+          }
+        }
+
 
     // Prompt the user for what to tweak
     if (from_wa && PHONE_ID && TOKEN) {
