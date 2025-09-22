@@ -396,6 +396,11 @@ export async function POST(request) {
             console.error('awaiting_edit fallback failed:', e?.message || e);
           }
         }
+      } catch (e) {
+        console.error('request_edit handler failed:', e?.message || e);
+      }
+    }
+
 
 
     // Prompt the user for what to tweak
