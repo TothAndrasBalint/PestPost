@@ -400,46 +400,95 @@ export async function POST(request) {
         await supabaseAdmin.from('draft_posts').update({ awaiting_edit: false }).eq('id', parent.id);
       } catch {}
 
-      // create a new draft (placeholder variant): reuse image, set caption to user's text
-      const newDraft = {
-        source_message_id: wa_message_id,     // current text message
-        from_wa,
-        text_body,                            // DB keeps raw user text for now
-        media_path: parent.media_path || null,
-        media_mime: parent.media_mime || null,
-        status: 'draft'
-      };
-
-      const { data: inserted, error: draftErr } = await supabaseAdmin
-        .from('draft_posts')
-        .upsert(newDraft, { onConflict: 'source_message_id' })
-        .select()
-        .single();
-
-      if (draftErr) {
-        console.error('create placeholder variant failed:', draftErr);
-      } else if (PHONE_ID && TOKEN) {
-        // Build the preview caption using AI, keeping original context + the new steering
-        let previewCaption = text_body;
-        try {
-          const constraints = parseConstraints(text_body);
-        
-          // 👇 NEW: include parent caption so we don't lose context (e.g., "river cruise")
-          const seed = parent?.text_body
-            ? `${parent.text_body}\n\nEdit request: ${text_body}`
-            : text_body;
-        
-          const { caption_final, hashtags } = await generateCaptionAndTags({
-            seedText: seed,
-            constraints,
-            clientPrefs: {}
+      // --- lineage-aware variant creation with regen cap + stored constraints ---
+      let previewCaption = text_body;      // will be replaced by AI output below
+      let modelCaption = null;             // raw caption_final from the generator
+      let tagLine = '';                    // built from returned hashtags
+      
+      try {
+        // 1) regen cap (max 3)
+        const parentRegen = Number(parent.regen_count || 0);
+        if (parentRegen >= 3) {
+          if (from_wa && PHONE_ID && TOKEN) {
+            try { await sendWaText(from_wa, "I’ve already made 3 edits for this post. To continue, please say what should change in a **new** post, or send a new photo."); } catch {}
+          }
+          return new Response(JSON.stringify({ ok: true, kind: 'edit_limit' }), {
+            headers: { 'content-type': 'application/json; charset=utf-8' }
           });
-          const tagLine = (hashtags && hashtags.length) ? '\n\n' + hashtags.join(' ') : '';
-          previewCaption = (caption_final || text_body) + tagLine;
+        }
+      
+        // 2) parse steering + keep original context as seed
+        const constraints = parseConstraints(text_body);
+        const seed = parent?.text_body
+          ? `${parent.text_body}\n\nEdit request: ${text_body}`
+          : text_body;
+      
+        // 3) generate caption using constraints
+        let hashtags = [];
+        try {
+          const gen = await generateCaptionAndTags({ seedText: seed, constraints, clientPrefs: {} });
+          modelCaption = gen?.caption_final || null;
+          hashtags = Array.isArray(gen?.hashtags) ? gen.hashtags : [];
         } catch (e) {
           console.error('AI caption generation failed, using user text:', e?.message || e);
         }
-
+        tagLine = (hashtags && hashtags.length) ? '\n\n' + hashtags.join(' ') : '';
+        previewCaption = (modelCaption || text_body) + tagLine;
+      
+        // 4) compute next variant number
+        let nextVariantNum = 1;
+        try {
+          const { data: lastVar } = await supabaseAdmin
+            .from('draft_posts')
+            .select('variant_num')
+            .eq('variant_of', parent.id)
+            .order('variant_num', { ascending: false })
+            .limit(1);
+          if (lastVar && lastVar.length && Number.isFinite(Number(lastVar[0].variant_num))) {
+            nextVariantNum = Number(lastVar[0].variant_num) + 1;
+          }
+        } catch {}
+      
+        // 5) insert the new variant row with lineage + regen metadata
+        const newDraft = {
+          source_message_id: wa_message_id,             // current text message id (unique)
+          from_wa,
+          text_body,                                    // raw user steering text
+          media_path: parent.media_path || null,
+          media_mime: parent.media_mime || null,
+          status: 'draft',
+          // lineage / regen
+          variant_of: parent.id,
+          variant_num: nextVariantNum,
+          regen_count: (Number(parent.regen_count || 0) + 1),
+          // caption metadata
+          caption_seed: text_body,
+          caption_final: modelCaption || null,
+          constraints_json: constraints
+        };
+      
+        const { data: inserted, error: draftErr } = await supabaseAdmin
+          .from('draft_posts')
+          .upsert(newDraft, { onConflict: 'source_message_id' })
+          .select()
+          .single();
+      
+        if (draftErr) {
+          console.error('create variant failed:', draftErr);
+        } else if (PHONE_ID && TOKEN) {
+          // (the send-preview block below will use `inserted` + `previewCaption`)
+          // fall through to sending
+        } else {
+          // nothing to send (missing WA creds) — just ACK below
+        }
+      
+        // stash for sending section
+        var insertedVariant = inserted || null;
+      
+      } catch (e) {
+        console.error('variant creation flow failed:', e?.message || e);
+      }
+      
 
 
         // send preview (image+caption if media, else text), then buttons tied to it
@@ -448,11 +497,11 @@ export async function POST(request) {
 
           // First message: media or text
           let firstMsgId = null;
-          if (inserted.media_path) {
+          if (insertedVariant && insertedVariant.media_path) {
             // sign a private URL for 5 minutes
             const { data: signed } = await supabaseAdmin
               .storage.from('media')
-              .createSignedUrl(inserted.media_path, 300);
+              .createSignedUrl(insertedVariant.media_path, 300);
             const link = signed?.signedUrl || null;
 
             const payload1 = link
@@ -514,8 +563,8 @@ export async function POST(request) {
               body: { text: 'Approve this post, or request edits.' },
               action: {
                 buttons: [
-                  { type: 'reply', reply: { id: `approve:${inserted.id}`,      title: 'Approve ✅' } },
-                  { type: 'reply', reply: { id: `request_edit:${inserted.id}`, title: 'Request edit ✍️' } }
+                  { type: 'reply', reply: { id: `approve:${insertedVariant.id}`,      title: 'Approve ✅' } },
+                  { type: 'reply', reply: { id: `request_edit:${insertedVariant.id}`, title: 'Request edit ✍️' } }
                 ]
               }
             }
