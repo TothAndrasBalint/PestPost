@@ -457,9 +457,17 @@ export async function POST(request) {
     let modelCaption = null;
     let hashtags = [];
     try {
+      // Customer-facing rewrite; forbid meta/instruction words
       const seed = parent.text_body
-        ? `${parent.text_body}\n\nMake a fresh alternative phrasing. Keep the same offer & facts.`
-        : 'Make a fresh alternative phrasing.';
+        ? `${parent.text_body}
+    
+    Rewrite the caption for customers. Keep the same offer & facts.
+    Do not mention edits, dislikes, alternatives, or instructions.
+    Do not use the words "don't like", "dislike", "alternative", "edit", "request edit".`
+        : `Rewrite the caption for customers. Keep the same offer & facts.
+    Do not mention edits, dislikes, alternatives, or instructions.
+    Do not use the words "don't like", "dislike", "alternative", "edit", "request edit".`;
+    
       const gen = await generateCaptionAndTags({ seedText: seed, constraints: altConstraints, clientPrefs: {} });
       modelCaption = gen?.caption_final || null;
       hashtags = Array.isArray(gen?.hashtags) ? gen.hashtags : [];
