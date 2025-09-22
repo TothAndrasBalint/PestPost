@@ -544,34 +544,59 @@ export async function POST(request) {
       });
     }
   
-    // 6) send preview (image+caption if media, then buttons incl. Don’t like)
+    // 6) send preview (image+caption if media), capture message_id; then buttons with context
     if (PHONE_ID && TOKEN) {
       const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
-  
+      let previewMsgId = null;
+    
       // a) media or text preview
-      if (insertedRow.media_path) {
-        // sign URL for WhatsApp to fetch
-        const { data: signed, error: signErr } = await supabaseAdmin.storage
-          .from('media')
-          .createSignedUrl(insertedRow.media_path, 60);
-        if (!signErr && signed?.signedUrl) {
-          // image+caption
-          await fetch(endpoint, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${TOKEN}`,
-              'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-              messaging_product: 'whatsapp',
-              to: from_wa,
-              type: 'image',
-              image: { link: signed.signedUrl, caption: previewCaption }
-            })
-          });
+      try {
+        if (insertedRow.media_path) {
+          // sign URL for WhatsApp to fetch
+          const { data: signed, error: signErr } = await supabaseAdmin.storage
+            .from('media')
+            .createSignedUrl(insertedRow.media_path, 60);
+    
+          if (!signErr && signed?.signedUrl) {
+            // image+caption
+            const res = await fetch(endpoint, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${TOKEN}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                messaging_product: 'whatsapp',
+                to: from_wa,
+                type: 'image',
+                image: { link: signed.signedUrl, caption: previewCaption }
+              })
+            });
+            const j = await res.json().catch(() => ({}));
+            previewMsgId = j?.messages?.[0]?.id || null;
+            if (!res.ok) console.error('WA image preview failed', res.status, j?.error || j);
+          } else {
+            // fallback to text if we can't sign URL
+            const res = await fetch(endpoint, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${TOKEN}`,
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({
+                messaging_product: 'whatsapp',
+                to: from_wa,
+                type: 'text',
+                text: { body: previewCaption }
+              })
+            });
+            const j = await res.json().catch(() => ({}));
+            previewMsgId = j?.messages?.[0]?.id || null;
+            if (!res.ok) console.error('WA text fallback failed', res.status, j?.error || j);
+          }
         } else {
-          // fallback to text if we can't sign URL
-          await fetch(endpoint, {
+          // text-only preview
+          const res = await fetch(endpoint, {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${TOKEN}`,
@@ -584,10 +609,24 @@ export async function POST(request) {
               text: { body: previewCaption }
             })
           });
+          const j = await res.json().catch(() => ({}));
+          previewMsgId = j?.messages?.[0]?.id || null;
+          if (!res.ok) console.error('WA text preview failed', res.status, j?.error || j);
         }
-      } else {
-        // text-only preview
-        await fetch(endpoint, {
+      } catch (e) {
+        console.error('WA preview send threw:', e?.message || e);
+      }
+    
+      // b) small delay, then buttons (tie to preview via context if we have an id)
+      await new Promise(r => setTimeout(r, 3500));
+      const buttons = [
+        { type: 'reply', reply: { id: `approve:${insertedRow.id}`,      title: 'Approve ✅' } },
+        { type: 'reply', reply: { id: `request_edit:${insertedRow.id}`, title: 'Request edit ✍️' } },
+        { type: 'reply', reply: { id: `dontlike:${insertedRow.id}`,     title: 'Don’t like 👎' } }
+      ];
+    
+      try {
+        const res = await fetch(endpoint, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${TOKEN}`,
@@ -596,37 +635,22 @@ export async function POST(request) {
           body: JSON.stringify({
             messaging_product: 'whatsapp',
             to: from_wa,
-            type: 'text',
-            text: { body: previewCaption }
+            type: 'interactive',
+            ...(previewMsgId ? { context: { message_id: previewMsgId } } : {}),
+            interactive: {
+              type: 'button',
+              body: { text: 'What next?' },
+              action: { buttons }
+            }
           })
         });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) console.error('WA buttons send failed', res.status, j?.error || j);
+      } catch (e) {
+        console.error('WA buttons send threw:', e?.message || e);
       }
-  
-      // b) small delay, then buttons
-      await new Promise(r => setTimeout(r, 3500));
-      const buttons = [
-        { type: 'reply', reply: { id: `approve:${insertedRow.id}`, title: 'Approve ✅' } },
-        { type: 'reply', reply: { id: `request_edit:${insertedRow.id}`, title: 'Request edit ✍️' } },
-        { type: 'reply', reply: { id: `dontlike:${insertedRow.id}`, title: 'Don’t like 👎' } }
-      ];
-      await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to: from_wa,
-          type: 'interactive',
-          interactive: {
-            type: 'button',
-            body: { text: 'What next?' },
-            action: { buttons }
-          }
-        })
-      });
     }
+
   
     return new Response(JSON.stringify({ ok: true, kind: 'dontlike_variant_created', id: insertedRow.id }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
