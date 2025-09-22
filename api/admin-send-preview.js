@@ -123,7 +123,8 @@ async function handle(request) {
       action: {
         buttons: [
           { type: 'reply', reply: { id: `approve:${draft.id}`,      title: 'Approve ✅' } },
-          { type: 'reply', reply: { id: `request_edit:${draft.id}`, title: 'Request edit ✍️' } }
+          { type: 'reply', reply: { id: `request_edit:${draft.id}`, title: 'Request edit ✍️' } },
+          { type: 'reply', reply: { id: `dontlike:${draft.id}`,     title: "Don't like 👎" } }
         ]
       }
     }
