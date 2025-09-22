@@ -362,8 +362,7 @@ export async function POST(request) {
           const { data: flagged, error: flagErr } = await supabaseAdmin
             .from('draft_posts')
             .update({ awaiting_edit: true })
-            .eq('id', draftId)
-            .eq('from_wa', from_wa)     // ensure the draft belongs to this WA number
+            .eq('id', draftId)    // update by id only (more robust)
             .select()
             .single();
         
