@@ -486,13 +486,13 @@ export async function POST(request) {
       constraints_json: { auto: true, strategy: 'dontlike_v1', ...altConstraints }
     };
   
-    const { data: insertedVariant, error: draftErr } = await supabaseAdmin
+    const { data: insertedRow, error: draftErr } = await supabaseAdmin
       .from('draft_posts')
       .insert(newVariant)
       .select()
       .single();
   
-    if (draftErr || !insertedVariant) {
+    if (draftErr || !insertedRow) {
       console.error('dontlike: insert failed', draftErr);
       return new Response(JSON.stringify({ ok: false, error: 'insert_failed' }), {
         status: 500, headers: { 'content-type': 'application/json; charset=utf-8' }
@@ -504,11 +504,11 @@ export async function POST(request) {
       const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
   
       // a) media or text preview
-      if (insertedVariant.media_path) {
+      if (insertedRow.media_path) {
         // sign URL for WhatsApp to fetch
         const { data: signed, error: signErr } = await supabaseAdmin.storage
           .from('media')
-          .createSignedUrl(insertedVariant.media_path, 60);
+          .createSignedUrl(insertedRow.media_path, 60);
         if (!signErr && signed?.signedUrl) {
           // image+caption
           await fetch(endpoint, {
@@ -560,9 +560,9 @@ export async function POST(request) {
       // b) small delay, then buttons
       await new Promise(r => setTimeout(r, 3500));
       const buttons = [
-        { type: 'reply', reply: { id: `approve:${insertedVariant.id}`, title: 'Approve ✅' } },
-        { type: 'reply', reply: { id: `request_edit:${insertedVariant.id}`, title: 'Request edit ✍️' } },
-        { type: 'reply', reply: { id: `dontlike:${insertedVariant.id}`, title: 'Don’t like 👎' } }
+        { type: 'reply', reply: { id: `approve:${insertedRow.id}`, title: 'Approve ✅' } },
+        { type: 'reply', reply: { id: `request_edit:${insertedRow.id}`, title: 'Request edit ✍️' } },
+        { type: 'reply', reply: { id: `dontlike:${insertedRow.id}`, title: 'Don’t like 👎' } }
       ];
       await fetch(endpoint, {
         method: 'POST',
@@ -583,7 +583,7 @@ export async function POST(request) {
       });
     }
   
-    return new Response(JSON.stringify({ ok: true, kind: 'dontlike_variant_created', id: insertedVariant.id }), {
+    return new Response(JSON.stringify({ ok: true, kind: 'dontlike_variant_created', id: insertedRow.id }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
 
