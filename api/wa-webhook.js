@@ -381,6 +381,212 @@ export async function POST(request) {
     });
   }
 
+  } else if (buttonId?.startsWith('dontlike:')) {
+    const idStr = buttonId.split(':')[1];
+    const parentId = Number(idStr);
+    if (!Number.isFinite(parentId)) {
+      return new Response(JSON.stringify({ ok: false, error: 'bad_dontlike_id' }), {
+        status: 400, headers: { 'content-type': 'application/json; charset=utf-8' }
+      });
+    }
+  
+    // 1) fetch parent draft
+    const { data: parent, error: pErr } = await supabaseAdmin
+      .from('draft_posts')
+      .select('*')
+      .eq('id', parentId)
+      .single();
+    if (pErr || !parent) {
+      console.error('dontlike: parent fetch failed', pErr);
+      return new Response(JSON.stringify({ ok: false, error: 'parent_not_found' }), {
+        status: 404, headers: { 'content-type': 'application/json; charset=utf-8' }
+      });
+    }
+  
+    // 2) regen cap (max 3 total)
+    const parentRegen = Number(parent.regen_count || 0);
+    if (parentRegen >= 3) {
+      // polite limit message
+      if (from_wa && PHONE_ID && TOKEN) {
+        try {
+          await fetch(`https://graph.facebook.com/v20.0/${PHONE_ID}/messages`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${TOKEN}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              messaging_product: 'whatsapp',
+              to: from_wa,
+              type: 'text',
+              text: { body: "I’ve already made 3 alternatives for this post. If you still don’t like it, please tell me what to change (Request edit ✍️)."}
+            })
+          });
+        } catch {}
+      }
+      return new Response(JSON.stringify({ ok: true, kind: 'regen_cap_reached' }), {
+        headers: { 'content-type': 'application/json; charset=utf-8' }
+      });
+    }
+  
+    // 3) compute next variant_num
+    let nextVariantNum = 1;
+    try {
+      const { data: lastVar } = await supabaseAdmin
+        .from('draft_posts')
+        .select('variant_num')
+        .eq('variant_of', parent.id)
+        .order('variant_num', { ascending: false })
+        .limit(1);
+      if (lastVar && lastVar.length && Number.isFinite(Number(lastVar[0].variant_num))) {
+        nextVariantNum = Number(lastVar[0].variant_num) + 1;
+      }
+    } catch {}
+  
+    // 4) generate a light alternative (no user steering)
+    //    small randomized tweak to keep it fresh but safe
+    const altConstraints = {
+      length: Math.random() < 0.5 ? 'short' : undefined,
+      tone: undefined,
+      emoji: undefined,
+      hashtags: [],
+      must_include: [],
+    };
+  
+    let modelCaption = null;
+    let hashtags = [];
+    try {
+      const seed = parent.text_body
+        ? `${parent.text_body}\n\nMake a fresh alternative phrasing. Keep the same offer & facts.`
+        : 'Make a fresh alternative phrasing.';
+      const gen = await generateCaptionAndTags({ seedText: seed, constraints: altConstraints, clientPrefs: {} });
+      modelCaption = gen?.caption_final || null;
+      hashtags = Array.isArray(gen?.hashtags) ? gen.hashtags : [];
+    } catch (e) {
+      console.error('dontlike: generator failed', e?.message || e);
+    }
+  
+    const tagLine = (hashtags && hashtags.length) ? '\n\n' + hashtags.join(' ') : '';
+    const previewCaption = (modelCaption || parent.text_body || '').trim() + tagLine;
+  
+    // 5) insert new variant
+    const newVariant = {
+      source_message_id: `auto-${Date.now()}-${Math.random().toString(36).slice(2,8)}`, // ensure unique
+      from_wa,
+      text_body: '(auto: dislike)',
+      media_path: parent.media_path || null,
+      media_mime: parent.media_mime || null,
+      status: 'draft',
+      variant_of: parent.id,
+      variant_num: nextVariantNum,
+      regen_count: parentRegen + 1,
+      caption_seed: '(auto: dislike)',
+      caption_final: modelCaption || null,
+      constraints_json: { auto: true, strategy: 'dontlike_v1', ...altConstraints }
+    };
+  
+    const { data: insertedVariant, error: draftErr } = await supabaseAdmin
+      .from('draft_posts')
+      .insert(newVariant)
+      .select()
+      .single();
+  
+    if (draftErr || !insertedVariant) {
+      console.error('dontlike: insert failed', draftErr);
+      return new Response(JSON.stringify({ ok: false, error: 'insert_failed' }), {
+        status: 500, headers: { 'content-type': 'application/json; charset=utf-8' }
+      });
+    }
+  
+    // 6) send preview (image+caption if media, then buttons incl. Don’t like)
+    if (PHONE_ID && TOKEN) {
+      const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
+  
+      // a) media or text preview
+      if (insertedVariant.media_path) {
+        // sign URL for WhatsApp to fetch
+        const { data: signed, error: signErr } = await supabaseAdmin.storage
+          .from('media')
+          .createSignedUrl(insertedVariant.media_path, 60);
+        if (!signErr && signed?.signedUrl) {
+          // image+caption
+          await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${TOKEN}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              messaging_product: 'whatsapp',
+              to: from_wa,
+              type: 'image',
+              image: { link: signed.signedUrl, caption: previewCaption }
+            })
+          });
+        } else {
+          // fallback to text if we can't sign URL
+          await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${TOKEN}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              messaging_product: 'whatsapp',
+              to: from_wa,
+              type: 'text',
+              text: { body: previewCaption }
+            })
+          });
+        }
+      } else {
+        // text-only preview
+        await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${TOKEN}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            to: from_wa,
+            type: 'text',
+            text: { body: previewCaption }
+          })
+        });
+      }
+  
+      // b) small delay, then buttons
+      await new Promise(r => setTimeout(r, 3500));
+      const buttons = [
+        { type: 'reply', reply: { id: `approve:${insertedVariant.id}`, title: 'Approve ✅' } },
+        { type: 'reply', reply: { id: `request_edit:${insertedVariant.id}`, title: 'Request edit ✍️' } },
+        { type: 'reply', reply: { id: `dontlike:${insertedVariant.id}`, title: 'Don’t like 👎' } }
+      ];
+      await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${TOKEN}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          to: from_wa,
+          type: 'interactive',
+          interactive: {
+            type: 'button',
+            body: { text: 'What next?' },
+            action: { buttons }
+          }
+        })
+      });
+    }
+  
+    return new Response(JSON.stringify({ ok: true, kind: 'dontlike_variant_created', id: insertedVariant.id }), {
+      headers: { 'content-type': 'application/json; charset=utf-8' }
+    });
+
+  
   // --- Consume next text when awaiting_edit is true (AI caption placeholder flow) ---
   if (event_type === 'text' && from_wa && text_body && supabaseAdmin) {
     // find the most recent draft marked awaiting_edit for this number
@@ -572,6 +778,7 @@ export async function POST(request) {
                 buttons: [
                   { type: 'reply', reply: { id: `approve:${insertedVariant.id}`,      title: 'Approve ✅' } },
                   { type: 'reply', reply: { id: `request_edit:${insertedVariant.id}`, title: 'Request edit ✍️' } }
+                  { type: 'reply', reply: { id: `dontlike:${insertedVariant.id}`, title: 'Don’t like 👎' } }
                 ]
               }
             }
