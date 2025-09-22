@@ -489,6 +489,13 @@ export async function POST(request) {
         console.error('variant creation flow failed:', e?.message || e);
       }
       
+      // Guard: if variant insert failed, don't try to send buttons (avoids crash)
+      if (!insertedVariant) {
+        console.error('No variant row created; skipping preview/buttons');
+        return new Response(JSON.stringify({ ok: true, kind: 'edit_captured_no_variant' }), {
+          headers: { 'content-type': 'application/json; charset=utf-8' }
+        });
+      }
 
 
         // send preview (image+caption if media, else text), then buttons tied to it
