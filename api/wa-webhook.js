@@ -873,6 +873,47 @@ export async function POST(request) {
     }
   }
 
+  // --- Non-image default handler (text-only, NOT in awaiting_edit) ---
+  if (event_type === 'text' && from_wa && !media_id && text_body) {
+    // Friendly Option A prompt with two buttons
+    try {
+      const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
+      const payload = {
+        messaging_product: 'whatsapp',
+        to: from_wa,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: {
+            text: "Hey! I can process posts when you send a photo (with or without a caption).\nWould you like me to forward this message to a human so they can reply?"
+          },
+          action: {
+            buttons: [
+              { type: 'reply', reply: { id: 'human_yes', title: 'Yes, please' } },
+              { type: 'reply', reply: { id: 'human_no',  title: 'Never mind' } }
+            ]
+          }
+        }
+      };
+  
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) console.error('WA non-image default failed', res.status, j?.error || j);
+    } catch (e) {
+      console.error('non-image default send threw:', e?.message || e);
+    }
+  
+    // Stop here so the old auto-reply or draft creation doesn't also fire
+    return new Response(JSON.stringify({ ok: true, kind: 'non_image_default' }), {
+      headers: { 'content-type': 'application/json; charset=utf-8' }
+    });
+  }
+
+
   // Keep track of saved media for draft creation
   let savedPath = null;
   let savedMime = null;
