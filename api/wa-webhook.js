@@ -145,6 +145,24 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
+  // --- TRACE: webhook entry ---
+  try {
+    const cloned = req.clone();
+    const raw = await cloned.text(); // does NOT consume the original body
+    console.log(
+      JSON.stringify({
+        at: new Date().toISOString(),
+        fn: "wa-webhook.POST:entry",
+        method: req.method,
+        len: raw ? raw.length : 0,
+        sig: req.headers.get("x-hub-signature-256") || null,
+        ua: req.headers.get("user-agent") || null,
+      })
+    );
+  } catch (e) {
+    console.error("TRACE entry failed:", e?.message || e);
+  }
+
   // 1) raw body for HMAC
   const raw = await request.text();
 
