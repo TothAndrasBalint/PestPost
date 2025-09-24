@@ -1002,15 +1002,6 @@ export async function POST(request) {
     else console.log('Draft created:', { source_message_id: wa_message_id });
   }
 
-  // 8) optional auto-reply
-  if (AUTO_REPLY && from_wa && event_type === 'text' && PHONE_ID && TOKEN) {
-    try {
-      await sendWaText(from_wa, 'PestPost: köszi, megjött 👌 / thanks, received 👌');
-    } catch (e) {
-      console.error('Auto-reply failed:', e.message || e);
-    }
-  }
-
   // 9) ack to Meta
   return new Response(JSON.stringify({ ok: true }), {
     headers: { 'content-type': 'application/json; charset=utf-8' }
