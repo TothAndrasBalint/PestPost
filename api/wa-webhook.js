@@ -427,6 +427,23 @@ export async function POST(request) {
       });
     }
   
+    // Idempotency: if this interactive event was already handled, skip (Meta may retry)
+    try {
+      const { data: existVar } = await supabaseAdmin
+        .from('draft_posts')
+        .select('id')
+        .eq('source_message_id', wa_message_id)
+        .limit(1);
+      if (Array.isArray(existVar) && existVar.length) {
+        console.log('[dontlike] duplicate wa_message_id, skip re-send for id', existVar[0].id);
+        return new Response(JSON.stringify({ ok: true, kind: 'dontlike_duplicate_ignored', id: existVar[0].id }), {
+          headers: { 'content-type': 'application/json; charset=utf-8' }
+        });
+      }
+    } catch (e) {
+      console.warn('[dontlike] dedupe check failed (continuing):', e?.message || e);
+    }
+  
     // 1) fetch parent draft
     const { data: parent, error: pErr } = await supabaseAdmin
       .from('draft_posts')
@@ -456,7 +473,7 @@ export async function POST(request) {
               messaging_product: 'whatsapp',
               to: from_wa,
               type: 'text',
-              text: { body: "I’ve already made 3 alternatives for this post. If you still don’t like it, please tell me what to change (Request edit ✍️)."}
+              text: { body: "I’ve already made 3 alternatives for this post. If you still don’t like it, please tell me what to change (Request edit ✍️)." }
             })
           });
         } catch {}
@@ -496,14 +513,14 @@ export async function POST(request) {
       // Customer-facing rewrite; forbid meta/instruction words
       const seed = parent.text_body
         ? `${parent.text_body}
-    
-    Rewrite the caption for customers. Keep the same offer & facts.
-    Do not mention edits, dislikes, alternatives, or instructions.
-    Do not use the words "don't like", "dislike", "alternative", "edit", "request edit".`
+  
+  Rewrite the caption for customers. Keep the same offer & facts.
+  Do not mention edits, dislikes, alternatives, or instructions.
+  Do not use the words "don't like", "dislike", "alternative", "edit", "request edit".`
         : `Rewrite the caption for customers. Keep the same offer & facts.
-    Do not mention edits, dislikes, alternatives, or instructions.
-    Do not use the words "don't like", "dislike", "alternative", "edit", "request edit".`;
-    
+  Do not mention edits, dislikes, alternatives, or instructions.
+  Do not use the words "don't like", "dislike", "alternative", "edit", "request edit".`;
+  
       const gen = await generateCaptionAndTags({ seedText: seed, constraints: altConstraints, clientPrefs: {} });
       modelCaption = gen?.caption_final || null;
       hashtags = Array.isArray(gen?.hashtags) ? gen.hashtags : [];
@@ -514,9 +531,9 @@ export async function POST(request) {
     const tagLine = (hashtags && hashtags.length) ? '\n\n' + hashtags.join(' ') : '';
     const previewCaption = (modelCaption || parent.text_body || '').trim() + tagLine;
   
-    // 5) insert new variant
+    // 5) upsert new variant — idempotent on wa_message_id of this interactive event
     const newVariant = {
-      source_message_id: `auto-${Date.now()}-${Math.random().toString(36).slice(2,8)}`, // ensure unique
+      source_message_id: wa_message_id,              // <<— key on real WA id for idempotency
       from_wa,
       text_body: '(auto: dislike)',
       media_path: parent.media_path || null,
@@ -532,12 +549,12 @@ export async function POST(request) {
   
     const { data: insertedRow, error: draftErr } = await supabaseAdmin
       .from('draft_posts')
-      .insert(newVariant)
+      .upsert(newVariant, { onConflict: 'source_message_id' })
       .select()
       .single();
   
     if (draftErr || !insertedRow) {
-      console.error('dontlike: insert failed', draftErr);
+      console.error('dontlike: upsert failed', draftErr);
       return new Response(JSON.stringify({ ok: false, error: 'insert_failed' }), {
         status: 500, headers: { 'content-type': 'application/json; charset=utf-8' }
       });
@@ -547,7 +564,7 @@ export async function POST(request) {
     if (PHONE_ID && TOKEN) {
       const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
       let previewMsgId = null;
-    
+  
       // a) media or text preview
       try {
         if (insertedRow.media_path) {
@@ -555,15 +572,12 @@ export async function POST(request) {
           const { data: signed, error: signErr } = await supabaseAdmin.storage
             .from('media')
             .createSignedUrl(insertedRow.media_path, 60);
-    
+  
           if (!signErr && signed?.signedUrl) {
             // image+caption
             const res = await fetch(endpoint, {
               method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${TOKEN}`,
-                'Content-Type': 'application/json'
-              },
+              headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 messaging_product: 'whatsapp',
                 to: from_wa,
@@ -578,10 +592,7 @@ export async function POST(request) {
             // fallback to text if we can't sign URL
             const res = await fetch(endpoint, {
               method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${TOKEN}`,
-                'Content-Type': 'application/json'
-              },
+              headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 messaging_product: 'whatsapp',
                 to: from_wa,
@@ -597,10 +608,7 @@ export async function POST(request) {
           // text-only preview
           const res = await fetch(endpoint, {
             method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${TOKEN}`,
-              'Content-Type': 'application/json'
-            },
+            headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
               messaging_product: 'whatsapp',
               to: from_wa,
@@ -615,7 +623,7 @@ export async function POST(request) {
       } catch (e) {
         console.error('WA preview send threw:', e?.message || e);
       }
-    
+  
       // b) small delay, then buttons (tie to preview via context if we have an id)
       await new Promise(r => setTimeout(r, 3500));
       const buttons = [
@@ -623,14 +631,11 @@ export async function POST(request) {
         { type: 'reply', reply: { id: `request_edit:${insertedRow.id}`, title: 'Request edit ✍️' } },
         { type: 'reply', reply: { id: `dontlike:${insertedRow.id}`,     title: 'Don’t like 👎' } }
       ];
-    
+  
       try {
         const res = await fetch(endpoint, {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${TOKEN}`,
-            'Content-Type': 'application/json'
-          },
+          headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({
             messaging_product: 'whatsapp',
             to: from_wa,
@@ -649,12 +654,12 @@ export async function POST(request) {
         console.error('WA buttons send threw:', e?.message || e);
       }
     }
-
   
     return new Response(JSON.stringify({ ok: true, kind: 'dontlike_variant_created', id: insertedRow.id }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
   }
+
 
   
   // --- Consume next text when awaiting_edit is true (AI caption placeholder flow) ---
