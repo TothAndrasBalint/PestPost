@@ -658,6 +658,43 @@ export async function POST(request) {
   
   // --- Consume next text when awaiting_edit is true (AI caption placeholder flow) ---
   if (event_type === 'text' && from_wa && text_body && supabaseAdmin) {
+      // Fallback: if no awaiting_edit is set yet, race-safe mark the most recent draft for this number
+      // as awaiting if it's very fresh (<3 minutes). This closes the small race where the user’s
+      // text arrives before the request_edit handler has set awaiting_edit=true.
+      try {
+        const { data: preAwaiting } = await supabaseAdmin
+          .from('draft_posts')
+          .select('id, created_at')
+          .eq('from_wa', from_wa)
+          .eq('awaiting_edit', true)
+          .limit(1);
+    
+        const hasAwaiting = Array.isArray(preAwaiting) && preAwaiting.length > 0;
+    
+        if (!hasAwaiting) {
+          const { data: recentRows } = await supabaseAdmin
+            .from('draft_posts')
+            .select('id, created_at')
+            .eq('from_wa', from_wa)
+            .order('id', { ascending: false })
+            .limit(1);
+    
+          if (Array.isArray(recentRows) && recentRows.length) {
+            const recent = recentRows[0];
+            const createdMs = Date.parse(recent.created_at);
+            const isFresh = Number.isFinite(createdMs) && (Date.now() - createdMs) < (3 * 60 * 1000);
+            if (isFresh) {
+              await supabaseAdmin
+                .from('draft_posts')
+                .update({ awaiting_edit: true })
+                .eq('id', recent.id);
+            }
+          }
+        }
+      } catch (e) {
+        console.error('awaiting_edit preflight fallback failed:', e?.message || e);
+      }
+
     // find the most recent draft marked awaiting_edit for this number
     const { data: awaitingRows, error: awaitingErr } = await supabaseAdmin
       .from('draft_posts')
