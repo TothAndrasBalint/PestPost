@@ -662,11 +662,28 @@ export async function POST(request) {
   // if there is a text_body, we consider it a candidate for edit-consume.
   if (from_wa && text_body && supabaseAdmin) {
     console.log('[edit-consume] candidate text from', from_wa, 'body len', (text_body || '').length);
-
+  
+    // Idempotency: if we already created a variant for this wa_message_id, skip re-sending
+    try {
+      const { data: existRow } = await supabaseAdmin
+        .from('draft_posts')
+        .select('id')
+        .eq('source_message_id', wa_message_id)
+        .limit(1);
+      if (Array.isArray(existRow) && existRow.length) {
+        console.log('[edit-consume] duplicate inbound wa_message_id, skip re-send for id', existRow[0].id);
+        return new Response(JSON.stringify({ ok: true, kind: 'edit_duplicate_ignored', id: existRow[0].id }), {
+          headers: { 'content-type': 'application/json; charset=utf-8' }
+        });
+      }
+    } catch (e) {
+      console.warn('[edit-consume] dedupe check failed (continuing):', e?.message || e);
+    }
+  
     // Normalize phone: keep digits only; also compute a "+digits" variant
     const digitsOnly = String(from_wa).replace(/\D+/g, '');
     const plusDigits = digitsOnly ? ('+' + digitsOnly) : null;
-
+  
     // 0) Try to pre-mark a fresh-most draft as awaiting if no explicit awaiting exists (race-safe)
     try {
       const { data: preAwaiting } = await supabaseAdmin
@@ -675,9 +692,9 @@ export async function POST(request) {
         .eq('awaiting_edit', true)
         .eq('from_wa', from_wa)
         .limit(1);
-
+  
       const hasAwaitingForExact = Array.isArray(preAwaiting) && preAwaiting.length > 0;
-
+  
       if (!hasAwaitingForExact) {
         const { data: recentRows } = await supabaseAdmin
           .from('draft_posts')
@@ -685,7 +702,7 @@ export async function POST(request) {
           .eq('from_wa', from_wa)
           .order('id', { ascending: false })
           .limit(1);
-
+  
         if (Array.isArray(recentRows) && recentRows.length) {
           const recent = recentRows[0];
           const createdMs = Date.parse(recent.created_at);
