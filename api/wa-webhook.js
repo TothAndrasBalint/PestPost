@@ -890,45 +890,40 @@ export async function POST(request) {
     }
   }
 
-  // --- Non-image default handler (text-only, NOT in awaiting_edit) ---
+  // --- Non-image default (plain text, no buttons) ---
   if (event_type === 'text' && from_wa && !media_id && text_body) {
-    // Friendly Option A prompt with two buttons
     try {
       const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
       const payload = {
         messaging_product: 'whatsapp',
         to: from_wa,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: {
-            text: "Hey! I can process posts when you send a photo (with or without a caption).\nWould you like me to forward this message to a human so they can reply?"
-          },
-          action: {
-            buttons: [
-              { type: 'reply', reply: { id: 'human_yes', title: 'Yes, please' } },
-              { type: 'reply', reply: { id: 'human_no',  title: 'Never mind' } }
-            ]
-          }
+        type: 'text',
+        text: {
+          preview_url: false,
+          body: "Hey! I can create posts when you send a photo (with or without a caption). For more information and contact details, please visit the website. Thanks!"
         }
       };
   
       const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        headers: {
+          'Authorization': `Bearer ${TOKEN}`,
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify(payload)
       });
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) console.error('WA non-image default failed', res.status, j?.error || j);
+      if (!res.ok) console.error('WA sablon send failed', res.status, j?.error || j);
     } catch (e) {
-      console.error('non-image default send threw:', e?.message || e);
+      console.error('WA sablon send threw:', e?.message || e);
     }
   
-    // Stop here so the old auto-reply or draft creation doesn't also fire
-    return new Response(JSON.stringify({ ok: true, kind: 'non_image_default' }), {
+    // stop here so nothing else runs for text-only inputs
+    return new Response(JSON.stringify({ ok: true, kind: 'non_image_sablon' }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
   }
+
 
 
   // Keep track of saved media for draft creation
