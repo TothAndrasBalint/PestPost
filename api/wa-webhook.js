@@ -657,222 +657,211 @@ export async function POST(request) {
 
   
   // --- Consume next text when awaiting_edit is true (AI caption placeholder flow) ---
-  if (event_type === 'text' && from_wa && text_body && supabaseAdmin) {
-      // Fallback: if no awaiting_edit is set yet, race-safe mark the most recent draft for this number
-      // as awaiting if it's very fresh (<3 minutes). This closes the small race where the user’s
-      // text arrives before the request_edit handler has set awaiting_edit=true.
-      try {
-        const { data: preAwaiting } = await supabaseAdmin
+  // NOTE: We intentionally do NOT check "event_type === 'text'". WA payload shapes vary;
+  // if there is a text_body, we consider it a candidate for edit-consume.
+  if (from_wa && text_body && supabaseAdmin) {
+    console.log('[edit-consume] candidate text from', from_wa, 'body len', (text_body || '').length);
+
+    // Normalize phone: keep digits only; also compute a "+digits" variant
+    const digitsOnly = String(from_wa).replace(/\D+/g, '');
+    const plusDigits = digitsOnly ? ('+' + digitsOnly) : null;
+
+    // 0) Try to pre-mark a fresh-most draft as awaiting if no explicit awaiting exists (race-safe)
+    try {
+      const { data: preAwaiting } = await supabaseAdmin
+        .from('draft_posts')
+        .select('id, created_at')
+        .eq('awaiting_edit', true)
+        .eq('from_wa', from_wa)
+        .limit(1);
+
+      const hasAwaitingForExact = Array.isArray(preAwaiting) && preAwaiting.length > 0;
+
+      if (!hasAwaitingForExact) {
+        const { data: recentRows } = await supabaseAdmin
           .from('draft_posts')
           .select('id, created_at')
           .eq('from_wa', from_wa)
-          .eq('awaiting_edit', true)
+          .order('id', { ascending: false })
           .limit(1);
-    
-        const hasAwaiting = Array.isArray(preAwaiting) && preAwaiting.length > 0;
-    
-        if (!hasAwaiting) {
-          const { data: recentRows } = await supabaseAdmin
-            .from('draft_posts')
-            .select('id, created_at')
-            .eq('from_wa', from_wa)
-            .order('id', { ascending: false })
-            .limit(1);
-    
-          if (Array.isArray(recentRows) && recentRows.length) {
-            const recent = recentRows[0];
-            const createdMs = Date.parse(recent.created_at);
-            const isFresh = Number.isFinite(createdMs) && (Date.now() - createdMs) < (3 * 60 * 1000);
-            if (isFresh) {
-              await supabaseAdmin
-                .from('draft_posts')
-                .update({ awaiting_edit: true })
-                .eq('id', recent.id);
-            }
+
+        if (Array.isArray(recentRows) && recentRows.length) {
+          const recent = recentRows[0];
+          const createdMs = Date.parse(recent.created_at);
+          const isFresh = Number.isFinite(createdMs) && (Date.now() - createdMs) < (3 * 60 * 1000);
+          if (isFresh) {
+            await supabaseAdmin.from('draft_posts').update({ awaiting_edit: true }).eq('id', recent.id);
+            console.log('[edit-consume] set awaiting_edit=true on recent id', recent.id);
           }
         }
-      } catch (e) {
-        console.error('awaiting_edit preflight fallback failed:', e?.message || e);
+      }
+    } catch (e) {
+      console.error('awaiting_edit preflight fallback failed:', e?.message || e);
+    }
+
+    // 1) Primary lookup: awaiting_edit for this number (try exact, +digits, and digits-only)
+    let parent = null;
+    try {
+      // a) exact match
+      let q = await supabaseAdmin
+        .from('draft_posts')
+        .select('*')
+        .eq('from_wa', from_wa)
+        .eq('awaiting_edit', true)
+        .order('id', { ascending: false })
+        .limit(1);
+      if (Array.isArray(q?.data) && q.data.length) parent = q.data[0];
+
+      // b) +digits match
+      if (!parent && plusDigits) {
+        q = await supabaseAdmin
+          .from('draft_posts')
+          .select('*')
+          .eq('from_wa', plusDigits)
+          .eq('awaiting_edit', true)
+          .order('id', { ascending: false })
+          .limit(1);
+        if (Array.isArray(q?.data) && q.data.length) parent = q.data[0];
       }
 
-    // find the most recent draft marked awaiting_edit for this number
-    const { data: awaitingRows, error: awaitingErr } = await supabaseAdmin
-      .from('draft_posts')
-      .select('*')
-      .eq('from_wa', from_wa)
-      .eq('awaiting_edit', true)
-      .order('id', { ascending: false })
-      .limit(1);
+      // c) digits-only match
+      if (!parent && digitsOnly) {
+        q = await supabaseAdmin
+          .from('draft_posts')
+          .select('*')
+          .eq('from_wa', digitsOnly)
+          .eq('awaiting_edit', true)
+          .order('id', { ascending: false })
+          .limit(1);
+        if (Array.isArray(q?.data) && q.data.length) parent = q.data[0];
+      }
+    } catch (e) {
+      console.error('[edit-consume] number-scoped awaiting lookup failed:', e?.message || e);
+    }
 
-    if (!awaitingErr && awaitingRows && awaitingRows.length) {
-      const parent = awaitingRows[0];
-
-      // clear awaiting flag on parent (best-effort)
+    // 2) TTL fallback: if none found by number, accept ANY fresh awaiting_edit row (<3m)
+    if (!parent) {
       try {
-        await supabaseAdmin.from('draft_posts').update({ awaiting_edit: false }).eq('id', parent.id);
-      } catch {}
-
-      // --- lineage-aware variant creation with regen cap + stored constraints ---
-      let previewCaption = text_body;      // will be replaced by AI output below
-      let modelCaption = null;             // raw caption_final from the generator
-      let tagLine = '';                    // built from returned hashtags
-      
-      try {
-        // 1) regen cap (max 3)
-        const parentRegen = Number(parent.regen_count || 0);
-        if (parentRegen >= 3) {
-          if (from_wa && PHONE_ID && TOKEN) {
-            try { await sendWaText(from_wa, "I’ve already made 3 edits for this post. To continue, please say what should change in a **new** post, or send a new photo."); } catch {}
-          }
-          return new Response(JSON.stringify({ ok: true, kind: 'edit_limit' }), {
-            headers: { 'content-type': 'application/json; charset=utf-8' }
-          });
+        const threeMinAgoIso = new Date(Date.now() - 3 * 60 * 1000).toISOString();
+        const { data: freshAwaiting } = await supabaseAdmin
+          .from('draft_posts')
+          .select('*')
+          .eq('awaiting_edit', true)
+          .gte('created_at', threeMinAgoIso)
+          .order('id', { ascending: false })
+          .limit(1);
+        if (Array.isArray(freshAwaiting) && freshAwaiting.length) {
+          parent = freshAwaiting[0];
+          console.warn('[edit-consume] WARNING: falling back to fresh global awaiting row id', parent.id);
         }
-      
-        // 2) parse steering + keep original context as seed
-        const constraints = parseConstraints(text_body);
-        const seed = parent?.text_body
+      } catch (e) {
+        console.error('[edit-consume] TTL fallback failed:', e?.message || e);
+      }
+    }
+
+    if (parent) {
+      console.log('[edit-consume] parent id', parent.id, 'variant_of', parent.variant_of, 'regen', parent.regen_count);
+
+      // Clear awaiting flag (best-effort)
+      try { await supabaseAdmin.from('draft_posts').update({ awaiting_edit: false }).eq('id', parent.id); } catch {}
+
+      // --- lineage-aware variant creation with constraints + AI caption ---
+      const parentRegen = Number(parent.regen_count || 0);
+      if (parentRegen >= 3) {
+        // cap already communicated elsewhere; we still allow edit as a child of same parent
+      }
+
+      const constraints = parseConstraints(text_body || '');
+      const seed =
+        (parent.caption_final && parent.text_body)
+          ? `${parent.caption_final}\n\nEdit request: ${text_body}`
+          : (parent.text_body)
           ? `${parent.text_body}\n\nEdit request: ${text_body}`
           : text_body;
-      
-        // 3) generate caption using constraints
-        let hashtags = [];
-        try {
-          const gen = await generateCaptionAndTags({ seedText: seed, constraints, clientPrefs: {} });
-          modelCaption = gen?.caption_final || null;
-          hashtags = Array.isArray(gen?.hashtags) ? gen.hashtags : [];
-        } catch (e) {
-          console.error('AI caption generation failed, using user text:', e?.message || e);
-        }
-        tagLine = (hashtags && hashtags.length) ? '\n\n' + hashtags.join(' ') : '';
-        previewCaption = (modelCaption || text_body) + tagLine;
-      
-        // 4) compute next variant number
-        let nextVariantNum = 1;
-        try {
-          const { data: lastVar } = await supabaseAdmin
-            .from('draft_posts')
-            .select('variant_num')
-            .eq('variant_of', parent.id)
-            .order('variant_num', { ascending: false })
-            .limit(1);
-          if (lastVar && lastVar.length && Number.isFinite(Number(lastVar[0].variant_num))) {
-            nextVariantNum = Number(lastVar[0].variant_num) + 1;
-          }
-        } catch {}
-      
-        // 5) insert the new variant row with lineage + regen metadata
-        const newDraft = {
-          source_message_id: wa_message_id,             // current text message id (unique)
-          from_wa,
-          text_body,                                    // raw user steering text
-          media_path: parent.media_path || null,
-          media_mime: parent.media_mime || null,
-          status: 'draft',
-          // lineage / regen
-          variant_of: parent.id,
-          variant_num: nextVariantNum,
-          regen_count: (Number(parent.regen_count || 0) + 1),
-          // caption metadata
-          caption_seed: text_body,
-          caption_final: modelCaption || null,
-          constraints_json: constraints
-        };
-      
-        const { data: inserted, error: draftErr } = await supabaseAdmin
-          .from('draft_posts')
-          .upsert(newDraft, { onConflict: 'source_message_id' })
-          .select()
-          .single();
-      
-        if (draftErr) {
-          console.error('create variant failed:', draftErr);
-        } else if (PHONE_ID && TOKEN) {
-          // (the send-preview block below will use `inserted` + `previewCaption`)
-          // fall through to sending
-        } else {
-          // nothing to send (missing WA creds) — just ACK below
-        }
-      
-        // stash for sending section
-        var insertedVariant = inserted || null;
-      
+
+      let modelCaption = null;
+      let tagLine = '';
+      try {
+        const gen = await generateCaptionAndTags({ seedText: seed, constraints, clientPrefs: {} });
+        modelCaption = gen?.caption_final || null;
+        const hashtags = Array.isArray(gen?.hashtags) ? gen.hashtags : [];
+        tagLine = hashtags.length ? '\n\n' + hashtags.join(' ') : '';
       } catch (e) {
-        console.error('variant creation flow failed:', e?.message || e);
+        console.error('AI caption generation failed, using user text:', e?.message || e);
       }
-      
-      // Guard: if variant insert failed, don't try to send buttons (avoids crash)
-      if (!insertedVariant) {
-        console.error('No variant row created; skipping preview/buttons');
+      const previewCaption = (modelCaption || text_body) + tagLine;
+
+      // next variant_num
+      let nextVariantNum = 1;
+      try {
+        const { data: lastVar } = await supabaseAdmin
+          .from('draft_posts')
+          .select('variant_num')
+          .eq('variant_of', parent.id)
+          .order('variant_num', { ascending: false })
+          .limit(1);
+        if (lastVar && lastVar.length && Number.isFinite(Number(lastVar[0].variant_num))) {
+          nextVariantNum = Number(lastVar[0].variant_num) + 1;
+        }
+      } catch {}
+
+      const newDraft = {
+        source_message_id: wa_message_id, // current text message id (assumed defined above)
+        from_wa,
+        text_body,
+        media_path: parent.media_path || null,
+        media_mime: parent.media_mime || null,
+        status: 'draft',
+        variant_of: parent.id,
+        variant_num: nextVariantNum,
+        regen_count: (Number(parent.regen_count || 0) + 1),
+        caption_seed: text_body,
+        caption_final: modelCaption || null,
+        constraints_json: constraints
+      };
+
+      const { data: inserted, error: draftErr } = await supabaseAdmin
+        .from('draft_posts')
+        .insert(newDraft)
+        .select('*')
+        .limit(1);
+
+      if (draftErr || !inserted || !inserted.length) {
+        console.error('create variant failed:', draftErr || 'no row returned');
         return new Response(JSON.stringify({ ok: true, kind: 'edit_captured_no_variant' }), {
           headers: { 'content-type': 'application/json; charset=utf-8' }
         });
       }
+      const insertedVariant = inserted[0];
 
+      // send preview, then buttons
+      if (PHONE_ID && TOKEN) {
+        const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
+        let firstMsgId = null;
 
-        // send preview (image+caption if media, else text), then buttons tied to it
         try {
-          const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
-
-          // First message: media or text
-          let firstMsgId = null;
-          if (insertedVariant && insertedVariant.media_path) {
-            // sign a private URL for 5 minutes
-            const { data: signed } = await supabaseAdmin
-              .storage.from('media')
-              .createSignedUrl(insertedVariant.media_path, 300);
-            const link = signed?.signedUrl || null;
+          if (insertedVariant.media_path && insertedVariant.media_mime) {
+            const signed = await supabaseAdmin.storage.from('media').createSignedUrl(insertedVariant.media_path, 300);
+            const link = signed?.data?.signedUrl;
 
             const payload1 = link
-              ? {
-                  messaging_product: 'whatsapp',
-                  to: from_wa,
-                  type: 'image',
-                  image: { link, caption: previewCaption } // <-- uses AI caption
-                }
-              : {
-                  messaging_product: 'whatsapp',
-                  to: from_wa,
-                  type: 'text',
-                  text: { preview_url: false, body: previewCaption } // <-- uses AI caption
-                };
+              ? { messaging_product: 'whatsapp', to: from_wa, type: 'image', image: { link, caption: previewCaption } }
+              : { messaging_product: 'whatsapp', to: from_wa, type: 'text', text: { preview_url: false, body: previewCaption } };
 
-            const res1 = await fetch(endpoint, {
-              method: 'POST',
-              headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload1)
-            });
+            const res1 = await fetch(endpoint, { method: 'POST', headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload1) });
             const j1 = await res1.json();
-            if (res1.ok && Array.isArray(j1?.messages)) {
-              firstMsgId = j1.messages[0]?.id || null;
-            } else {
-              console.error('send preview failed:', j1);
-            }
+            if (res1.ok && Array.isArray(j1?.messages)) firstMsgId = j1.messages[0]?.id || null;
+            else console.error('send preview failed:', j1);
           } else {
-            // text-only preview
-            const payload1 = {
-              messaging_product: 'whatsapp',
-              to: from_wa,
-              type: 'text',
-              text: { preview_url: false, body: previewCaption } // <-- uses AI caption
-            };
-            const res1 = await fetch(endpoint, {
-              method: 'POST',
-              headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload1)
-            });
+            const payload1 = { messaging_product: 'whatsapp', to: from_wa, type: 'text', text: { preview_url: false, body: previewCaption } };
+            const res1 = await fetch(endpoint, { method: 'POST', headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload1) });
             const j1 = await res1.json();
-            if (res1.ok && Array.isArray(j1?.messages)) {
-              firstMsgId = j1.messages[0]?.id || null;
-            } else {
-              console.error('send text preview failed:', j1);
-            }
+            if (res1.ok && Array.isArray(j1?.messages)) firstMsgId = j1.messages[0]?.id || null;
+            else console.error('send text preview failed:', j1);
           }
 
-          // wait so the image lands first
-          await sleep(3500);
+          await new Promise(r => setTimeout(r, 3500));
 
-          // Second message: buttons (tie to the first message via context if available)
           const buttons = {
             messaging_product: 'whatsapp',
             to: from_wa,
@@ -884,29 +873,26 @@ export async function POST(request) {
                 buttons: [
                   { type: 'reply', reply: { id: `approve:${insertedVariant.id}`,      title: 'Approve ✅' } },
                   { type: 'reply', reply: { id: `request_edit:${insertedVariant.id}`, title: 'Request edit ✍️' } },
-                  { type: 'reply', reply: { id: `dontlike:${insertedVariant.id}`, title: 'Don’t like 👎' } }
+                  { type: 'reply', reply: { id: `dontlike:${insertedVariant.id}`,     title: 'Don’t like 👎' } }
                 ]
               }
             }
           };
           if (firstMsgId) buttons.context = { message_id: firstMsgId };
 
-          const res2 = await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify(buttons)
-          });
+          const res2 = await fetch(endpoint, { method: 'POST', headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify(buttons) });
           const j2 = await res2.json();
-          if (!res2.ok) console.error('send buttons failed:', j2);
+          if (!res2.ok) console.error('WA buttons send failed', res2.status, j2?.error || j2);
         } catch (e) {
-          console.error('preview+buttons send error:', e?.message || e);
+          console.error('variant preview/buttons send failed:', e?.message || e);
         }
       }
 
-      // ACK and exit (do not run the normal draft creation below)
-      return new Response(JSON.stringify({ ok: true, kind: 'edit_captured' }), {
+      return new Response(JSON.stringify({ ok: true, kind: 'edit_variant_created', id: insertedVariant.id }), {
         headers: { 'content-type': 'application/json; charset=utf-8' }
       });
+    } else {
+      console.log('[edit-consume] no awaiting parent found for', from_wa, '— letting other handlers run.');
     }
   }
 
