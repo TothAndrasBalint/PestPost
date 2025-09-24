@@ -145,23 +145,6 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
-  // --- TRACE: webhook entry ---
-  try {
-    const cloned = request.clone();           // clone so we can still read the real body later
-    const rawLog = await cloned.text();       // safe: consumes the clone, not the real request
-    console.log(JSON.stringify({
-      at: new Date().toISOString(),
-      fn: "wa-webhook.POST:entry",
-      method: request.method,
-      len: rawLog ? rawLog.length : 0,
-      sig: request.headers.get("x-hub-signature-256") || null,
-      ua: request.headers.get("user-agent") || null,
-    }));
-  } catch (e) {
-    console.error("TRACE entry failed:", e?.message || e);
-  }
-
-
   // 1) raw body for HMAC
   const raw = await request.text();
 
@@ -223,52 +206,6 @@ export async function POST(request) {
   // 4) normalize fields (now includes media_id + text_body + interactive_id)
   const { wa_message_id, from_wa, event_type, media_id, text_body, interactive_id } = parseWaEvent(body);
 
-  // --- Early sablon gate: text-only (no media) and not in awaiting edit → reply + exit
-  let awaitingActive = false;
-  if (from_wa && supabaseAdmin) {
-    try {
-      const { data: rows } = await supabaseAdmin
-        .from('draft_posts')
-        .select('id')
-        .eq('from_wa', from_wa)
-        .eq('awaiting_edit', true)
-        .limit(1);
-      awaitingActive = Array.isArray(rows) && rows.length > 0;
-    } catch (e) {
-      console.error('awaitingActive check failed', e?.message || e);
-    }
-  }
-  
-  if (event_type === 'text' && from_wa && !media_id && text_body && !awaitingActive) {
-    try {
-      const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
-      const payload = {
-        messaging_product: 'whatsapp',
-        to: from_wa,
-        type: 'text',
-        text: {
-          preview_url: false,
-          body:
-            "Hey! I can create posts when you send a photo (with or without a caption). For more information and contact details, please visit the website. Thanks!",
-        },
-      };
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) console.error('WA sablon send failed', res.status, j?.error || j);
-    } catch (e) {
-      console.error('WA sablon send threw:', e?.message || e);
-    }
-  
-    // stop here — don’t let text-only messages fall into draft creation
-    return new Response(JSON.stringify({ ok: true, kind: 'non_image_sablon_early' }), {
-      headers: { 'content-type': 'application/json; charset=utf-8' },
-    });
-  }
-
   // 5) idempotent insert into Supabase (events log) — only if we have a message id
   if (supabaseAdmin) {
     if (wa_message_id) {
@@ -286,7 +223,6 @@ export async function POST(request) {
   } else {
     console.warn('Supabase env not set; skipping DB insert.');
   }
-  
 
   // --- Handle Approve button (interactive.button_reply) and exit early ---
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('approve:')) {
@@ -346,7 +282,6 @@ export async function POST(request) {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
   }
-
 
 
   // --- Handle Post now (scheduling) ---
@@ -719,7 +654,7 @@ export async function POST(request) {
     return new Response(JSON.stringify({ ok: true, kind: 'dontlike_variant_created', id: insertedRow.id }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
-    }
+
   
   // --- Consume next text when awaiting_edit is true (AI caption placeholder flow) ---
   if (event_type === 'text' && from_wa && text_body && supabaseAdmin) {
@@ -979,6 +914,15 @@ export async function POST(request) {
 
     if (draftErr) console.error('Supabase upsert (draft_posts) error:', draftErr);
     else console.log('Draft created:', { source_message_id: wa_message_id });
+  }
+
+  // 8) optional auto-reply
+  if (AUTO_REPLY && from_wa && event_type === 'text' && PHONE_ID && TOKEN) {
+    try {
+      await sendWaText(from_wa, 'PestPost: köszi, megjött 👌 / thanks, received 👌');
+    } catch (e) {
+      console.error('Auto-reply failed:', e.message || e);
+    }
   }
 
   // 9) ack to Meta
