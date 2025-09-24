@@ -223,6 +223,53 @@ export async function POST(request) {
   // 4) normalize fields (now includes media_id + text_body + interactive_id)
   const { wa_message_id, from_wa, event_type, media_id, text_body, interactive_id } = parseWaEvent(body);
 
+  // --- Early sablon gate: text-only (no media) and not in awaiting edit → reply + exit
+  let awaitingActive = false;
+  if (from_wa && supabaseAdmin) {
+    try {
+      const { data: rows } = await supabaseAdmin
+        .from('draft_posts')
+        .select('id')
+        .eq('from_wa', from_wa)
+        .eq('awaiting_edit', true)
+        .limit(1);
+      awaitingActive = Array.isArray(rows) && rows.length > 0;
+    } catch (e) {
+      console.error('awaitingActive check failed', e?.message || e);
+    }
+  }
+  
+  if (event_type === 'text' && from_wa && !media_id && text_body && !awaitingActive) {
+    try {
+      const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
+      const payload = {
+        messaging_product: 'whatsapp',
+        to: from_wa,
+        type: 'text',
+        text: {
+          preview_url: false,
+          body:
+            "Hey! I can create posts when you send a photo (with or without a caption). For more information and contact details, please visit the website. Thanks!",
+        },
+      };
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) console.error('WA sablon send failed', res.status, j?.error || j);
+    } catch (e) {
+      console.error('WA sablon send threw:', e?.message || e);
+    }
+  
+    // stop here — don’t let text-only messages fall into draft creation
+    return new Response(JSON.stringify({ ok: true, kind: 'non_image_sablon_early' }), {
+      headers: { 'content-type': 'application/json; charset=utf-8' },
+    });
+  }
+
+
   // Check if any draft for this number is awaiting edit (to prevent sablon from firing)
   let awaitingActive = false;
   if (from_wa && supabaseAdmin) {
@@ -907,42 +954,6 @@ export async function POST(request) {
       });
     }
   }
-
-  // --- Non-image default (plain text, no buttons) ---
-  if (event_type === 'text' && from_wa && !media_id && text_body && !awaitingActive) {
-    try {
-      const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
-      const payload = {
-        messaging_product: 'whatsapp',
-        to: from_wa,
-        type: 'text',
-        text: {
-          preview_url: false,
-          body: "Hey! I can create posts when you send a photo (with or without a caption). For more information and contact details, please visit the website. Thanks!"
-        }
-      };
-  
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-      const j = await res.json().catch(() => ({}));
-      if (!res.ok) console.error('WA sablon send failed', res.status, j?.error || j);
-    } catch (e) {
-      console.error('WA sablon send threw:', e?.message || e);
-    }
-  
-    // stop here so nothing else runs for text-only inputs
-    return new Response(JSON.stringify({ ok: true, kind: 'non_image_sablon' }), {
-      headers: { 'content-type': 'application/json; charset=utf-8' }
-    });
-  }
-
-
 
   // Keep track of saved media for draft creation
   let savedPath = null;
