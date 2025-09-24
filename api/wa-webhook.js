@@ -257,6 +257,22 @@ export async function POST(request) {
   } else {
     console.warn('Supabase env not set; skipping DB insert.');
   }
+  
+  // Check if this number currently has an awaiting_edit draft
+  let awaitingActive = false;
+  if (from_wa && supabaseAdmin) {
+    try {
+      const { data: anyAwaiting, error: anyErr } = await supabaseAdmin
+        .from('draft_posts')
+        .select('id')
+        .eq('from_wa', from_wa)
+        .eq('awaiting_edit', true)
+        .limit(1);
+      if (!anyErr && anyAwaiting && anyAwaiting.length) awaitingActive = true;
+    } catch (e) {
+      console.error('awaitingActive check failed:', e?.message || e);
+    }
+  }
 
   // --- Handle Approve button (interactive.button_reply) and exit early ---
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('approve:')) {
