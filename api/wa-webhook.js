@@ -223,6 +223,23 @@ export async function POST(request) {
   // 4) normalize fields (now includes media_id + text_body + interactive_id)
   const { wa_message_id, from_wa, event_type, media_id, text_body, interactive_id } = parseWaEvent(body);
 
+  // Check if any draft for this number is awaiting edit (to prevent sablon from firing)
+  let awaitingActive = false;
+  if (from_wa && supabaseAdmin) {
+    try {
+      const { data: _rows } = await supabaseAdmin
+        .from('draft_posts')
+        .select('id')
+        .eq('from_wa', from_wa)
+        .eq('awaiting_edit', true)
+        .limit(1);
+      awaitingActive = Array.isArray(_rows) && _rows.length > 0;
+    } catch (e) {
+      console.error('awaitingActive check failed', e?.message || e);
+    }
+  }
+
+
   // 5) idempotent insert into Supabase (events log) — only if we have a message id
   if (supabaseAdmin) {
     if (wa_message_id) {
@@ -891,7 +908,7 @@ export async function POST(request) {
   }
 
   // --- Non-image default (plain text, no buttons) ---
-  if (event_type === 'text' && from_wa && !media_id && text_body) {
+  if (event_type === 'text' && from_wa && !media_id && text_body && !awaitingActive) {
     try {
       const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
       const payload = {
