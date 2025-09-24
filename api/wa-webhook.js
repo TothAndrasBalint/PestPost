@@ -269,24 +269,6 @@ export async function POST(request) {
     });
   }
 
-
-  // Check if any draft for this number is awaiting edit (to prevent sablon from firing)
-  let awaitingActive = false;
-  if (from_wa && supabaseAdmin) {
-    try {
-      const { data: _rows } = await supabaseAdmin
-        .from('draft_posts')
-        .select('id')
-        .eq('from_wa', from_wa)
-        .eq('awaiting_edit', true)
-        .limit(1);
-      awaitingActive = Array.isArray(_rows) && _rows.length > 0;
-    } catch (e) {
-      console.error('awaitingActive check failed', e?.message || e);
-    }
-  }
-
-
   // 5) idempotent insert into Supabase (events log) — only if we have a message id
   if (supabaseAdmin) {
     if (wa_message_id) {
@@ -736,6 +718,7 @@ export async function POST(request) {
     return new Response(JSON.stringify({ ok: true, kind: 'dontlike_variant_created', id: insertedRow.id }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
+  }
 
   
   // --- Consume next text when awaiting_edit is true (AI caption placeholder flow) ---
