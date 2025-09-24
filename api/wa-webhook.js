@@ -719,7 +719,6 @@ export async function POST(request) {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
     }
-
   
   // --- Consume next text when awaiting_edit is true (AI caption placeholder flow) ---
   if (event_type === 'text' && from_wa && text_body && supabaseAdmin) {
