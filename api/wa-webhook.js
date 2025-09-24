@@ -718,7 +718,7 @@ export async function POST(request) {
     return new Response(JSON.stringify({ ok: true, kind: 'dontlike_variant_created', id: insertedRow.id }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
-  }
+    }
 
   
   // --- Consume next text when awaiting_edit is true (AI caption placeholder flow) ---
