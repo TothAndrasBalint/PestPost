@@ -246,7 +246,7 @@ export async function POST(request) {
         if (from_wa && PHONE_ID && TOKEN) {
           try { await sendWaText(from_wa, 'Approved ✅ — thanks!'); } catch {}
           try {
-            await sleep(1200);
+            await sleep(3500);
             const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
             const schedButtons = {
               messaging_product: 'whatsapp',
