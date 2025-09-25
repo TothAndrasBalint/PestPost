@@ -665,7 +665,7 @@ export async function POST(request) {
   // --- Consume next text when awaiting_edit is true (AI caption placeholder flow) ---
   // NOTE: We intentionally do NOT check "event_type === 'text'". WA payload shapes vary;
   // if there is a text_body, we consider it a candidate for edit-consume.
-  if (from_wa && text_body && supabaseAdmin) {
+  if (event_type === 'text' && from_wa && text_body && supabaseAdmin) {
     console.log('[edit-consume] candidate text from', from_wa, 'body len', (text_body || '').length);
   
     // Idempotency: if we already created a variant for this wa_message_id, DO NOT return early.
@@ -688,9 +688,10 @@ export async function POST(request) {
     // Normalize phone: keep digits only; also compute a "+digits" variant
     const digitsOnly = String(from_wa).replace(/\D+/g, '');
     const plusDigits = digitsOnly ? ('+' + digitsOnly) : null;
-  
+
+    // (disabled) Do not auto-flag awaiting_edit; only set it explicitly on Request edit.
     // 0) Try to pre-mark a fresh-most draft as awaiting if no explicit awaiting exists (race-safe)
-    try {
+    /*try {
       const { data: preAwaiting } = await supabaseAdmin
         .from('draft_posts')
         .select('id, created_at')
@@ -721,7 +722,8 @@ export async function POST(request) {
     } catch (e) {
       console.error('awaiting_edit preflight fallback failed:', e?.message || e);
     }
-  
+  */
+    
     // 1) Primary lookup: awaiting_edit for this number (try exact, +digits, and digits-only)
     let parent = null;
     try {
