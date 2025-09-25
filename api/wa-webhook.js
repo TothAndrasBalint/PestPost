@@ -974,8 +974,7 @@ export async function POST(request) {
 
   // 8) optional auto-reply (text-only guidance; do NOT trigger when media was saved)
   if (AUTO_REPLY && event_type === 'text' && from_wa && PHONE_ID && TOKEN) {
-    // If savedPath is not in scope, compute hasMedia via your WA fields too:
-    const hasMedia = Boolean(savedPath || image_id || media_id);
+    const hasMedia = Boolean(savedPath || media_id); // ← no image_id
     if (!hasMedia) {
       try {
         await sendWaText(from_wa, AUTO_REPLY_TEXT);
@@ -984,6 +983,7 @@ export async function POST(request) {
       }
     }
   }
+
 
 
   // 9) ack to Meta
