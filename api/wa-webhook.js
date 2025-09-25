@@ -11,6 +11,11 @@ const PHONE_ID = process.env.WA_PHONE_NUMBER_ID;
 const TOKEN = process.env.WA_ACCESS_TOKEN;
 const AUTO_REPLY = process.env.AUTO_REPLY === '1';
 
+// Customizable guidance for text-only messages
+const AUTO_REPLY_TEXT =
+  process.env.AUTO_REPLY_TEXT ||
+  'Hey, I can only process images for now (with or without caption text)! For signing up, tutorials, contact details visit: www.pestpost.com';
+
 // -------- helpers --------
 
 async function recordEvent(supabase, row) {
@@ -967,14 +972,19 @@ export async function POST(request) {
     else console.log('Draft created:', { source_message_id: wa_message_id });
   }
 
-  // 8) optional auto-reply
-  if (AUTO_REPLY && from_wa && event_type === 'text' && PHONE_ID && TOKEN) {
-    try {
-      await sendWaText(from_wa, 'PestPost: köszi, megjött 👌 / thanks, received 👌');
-    } catch (e) {
-      console.error('Auto-reply failed:', e.message || e);
+  // 8) optional auto-reply (text-only guidance; do NOT trigger when media was saved)
+  if (AUTO_REPLY && event_type === 'text' && from_wa && PHONE_ID && TOKEN) {
+    // If savedPath is not in scope, compute hasMedia via your WA fields too:
+    const hasMedia = Boolean(savedPath || image_id || media_id);
+    if (!hasMedia) {
+      try {
+        await sendWaText(from_wa, AUTO_REPLY_TEXT);
+      } catch (e) {
+        console.error('Auto-reply failed:', e?.message || e);
+      }
     }
   }
+
 
   // 9) ack to Meta
   return new Response(JSON.stringify({ ok: true }), {
