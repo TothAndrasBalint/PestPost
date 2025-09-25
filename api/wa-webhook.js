@@ -936,7 +936,7 @@ export async function POST(request) {
       savedMime = mime;
       console.log('Media saved:', { wa_message_id, media_id, path, mime });
 
-      if (supabaseAdmin && wa_message_id) {
+      if (supabaseAdmin && wa_message_id && savedPath) {
         const { error: upErr } = await supabaseAdmin
           .from('events')
           .update({ media_path: path, media_mime: mime })
@@ -949,7 +949,7 @@ export async function POST(request) {
   }
 
   // 7) create/ensure a draft_post (idempotent on source_message_id)
-  if (supabaseAdmin && wa_message_id) {
+  if (supabaseAdmin && wa_message_id && savedPath) {
     const draft = {
       source_message_id: wa_message_id,
       from_wa: from_wa || null,
