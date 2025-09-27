@@ -34,6 +34,133 @@ const WELCOME_ALWAYS = process.env.WELCOME_ALWAYS === '1';  // test mode: send w
 
 // -------- helpers --------
 
+// --- Auto-advance controls ---
+const AUTO_ADVANCE_ON = process.env.AUTO_ADVANCE_ON === '1';
+const AUTO_ADVANCE_DELAY_MS = Number(process.env.AUTO_ADVANCE_DELAY_MS || 1500);
+
+// Load the next pending draft (FIFO) for this client
+async function loadNextPendingDraftForClient(supabase, fromWa) {
+  if (!supabase || !fromWa) return null;
+  const { data, error } = await supabase
+    .from('draft_posts')
+    .select('*')
+    .eq('from_wa', fromWa)
+    .eq('status', 'draft')
+    .order('created_at', { ascending: true })
+    .limit(1);
+  if (error || !Array.isArray(data) || !data.length) return null;
+  return data[0];
+}
+
+// Send preview (media/text) + buttons for a specific draft row
+async function sendPreviewForDraftRow(draft, clientPrefs) {
+  if (!draft || !PHONE_ID || !TOKEN) return false;
+  const to = (draft.from_wa || '').trim();
+  if (!to) return false;
+
+  // Prefer server-generated caption if available, otherwise rebuild with prefs
+  let caption = draft.caption_final || draft.caption_seed || draft.text_body || 'Preview';
+  try {
+    if (!draft.caption_final) {
+      const inline = parseConstraints(draft.text_body || '');
+      const merged = mergeConstraintsWithPrefs(inline, clientPrefs || {});
+      const seedWithCtx = (draft.text_body || '') + buildBusinessContextLine(clientPrefs || {});
+      const gen = await generateCaptionAndTags({
+        seedText: seedWithCtx,
+        constraints: merged,
+        clientPrefs: clientPrefs || {}
+      });
+      const modelCaption = gen?.caption_final || null;
+      const hashtags = Array.isArray(gen?.hashtags) ? gen.hashtags : [];
+      const tagLine = hashtags.length ? '\n\n' + hashtags.join(' ') : '';
+      caption = (modelCaption || caption) + tagLine;
+    }
+  } catch (e) {
+    console.error('auto-advance: generator failed, falling back to caption', e?.message || e);
+  }
+
+  // Sign media, if any
+  let mediaSignedUrl = null;
+  if (draft.media_path) {
+    try {
+      const { data: signed } = await supabaseAdmin
+        .storage
+        .from('media')
+        .createSignedUrl(draft.media_path, 300);
+      mediaSignedUrl = signed?.signedUrl || null;
+    } catch (e) {
+      console.error('auto-advance: sign url failed', e?.message || e);
+    }
+  }
+
+  const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
+  let firstMsgId = null;
+
+  // Message 1: media or text
+  try {
+    const payload1 = mediaSignedUrl
+      ? { messaging_product: 'whatsapp', to, type: 'image', image: { link: mediaSignedUrl, caption } }
+      : { messaging_product: 'whatsapp', to, type: 'text', text: { preview_url: false, body: caption } };
+    const res1 = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload1)
+    });
+    const j1 = await res1.json().catch(() => ({}));
+    if (res1.ok && Array.isArray(j1?.messages)) firstMsgId = j1.messages[0]?.id || null;
+    else console.error('auto-advance: send preview failed', res1.status, j1?.error || j1);
+  } catch (e) {
+    console.error('auto-advance: send preview error', e?.message || e);
+  }
+
+  // Message 2: buttons (reply to first so it threads)
+  try {
+    await sleep(3500);
+    const buttonsPayload = {
+      messaging_product: 'whatsapp',
+      to,
+      type: 'interactive',
+      ...(firstMsgId ? { context: { message_id: firstMsgId } } : {}),
+      interactive: {
+        type: 'button',
+        body: { text: 'Approve this post, or request edits.' },
+        action: {
+          buttons: [
+            { type: 'reply', reply: { id: `approve:${draft.id}`,      title: 'Approve ✅' } },
+            { type: 'reply', reply: { id: `request_edit:${draft.id}`, title: 'Request edit ✍️' } },
+            { type: 'reply', reply: { id: `dontlike:${draft.id}`,     title: "Don't like 👎" } }
+          ]
+        }
+      }
+    };
+    const res2 = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(buttonsPayload)
+    });
+    const j2 = await res2.json().catch(() => ({}));
+    if (!res2.ok) console.error('auto-advance: buttons failed', res2.status, j2?.error || j2);
+  } catch (e) {
+    console.error('auto-advance: send buttons error', e?.message || e);
+  }
+
+  return true;
+}
+
+// Kick the next pending draft after a completion
+async function maybeAutoAdvanceNextPreview(fromWa) {
+  if (!AUTO_ADVANCE_ON || !fromWa || !supabaseAdmin) return;
+  try {
+    await sleep(AUTO_ADVANCE_DELAY_MS);
+    const next = await loadNextPendingDraftForClient(supabaseAdmin, fromWa);
+    if (!next) return;
+    const prefs = await loadClientPrefs(supabaseAdmin, fromWa);
+    await sendPreviewForDraftRow(next, prefs || {});
+  } catch (e) {
+    console.error('auto-advance: failed', e?.message || e);
+  }
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Count open drafts
@@ -510,11 +637,12 @@ export async function POST(request) {
 
         if (from_wa && PHONE_ID && TOKEN) {
           try { await sendWaText(from_wa, 'Queued now. 📥'); } catch {}
+          // NEW: auto-advance to the next pending draft
+          try { await maybeAutoAdvanceNextPreview(from_wa); } catch (e) {
+            console.error('auto-advance(postnow) failed:', e?.message || e);
+          }
         }
-      } catch (e) {
-        console.error('postnow update failed:', e?.message || e);
-      }
-    }
+
 
     return new Response(JSON.stringify({ ok: true, kind: 'schedule:now' }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
@@ -538,11 +666,12 @@ export async function POST(request) {
 
         if (from_wa && PHONE_ID && TOKEN) {
           try { await sendWaText(from_wa, 'Okay — I’ll queue this for AI scheduling. 🤖'); } catch {}
+          // NEW: auto-advance to the next pending draft
+          try { await maybeAutoAdvanceNextPreview(from_wa); } catch (e) {
+            console.error('auto-advance(aisched) failed:', e?.message || e);
+          }
         }
-      } catch (e) {
-        console.error('aisched update failed:', e?.message || e);
-      }
-    }
+
 
     return new Response(JSON.stringify({ ok: true, kind: 'schedule:ai' }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
