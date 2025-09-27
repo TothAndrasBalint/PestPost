@@ -236,6 +236,37 @@ export async function POST(request) {
   // 4) normalize fields (now includes media_id + text_body + interactive_id)
   const { wa_message_id, from_wa, event_type, media_id, text_body, interactive_id } = parseWaEvent(body);
 
+  // --- Welcome hub (first-contact & testing) ---
+  // Keep welcomeSent in this POST scope so we can guard later auto-reply logic (Step 2D)
+  let welcomeSent = false;
+  const isInteractive = event_type === 'interactive';
+  
+  // 1) Manual test keyword (works anytime): "WELCOME" or "/welcome"
+  if (!welcomeSent && from_wa && text_body && /^\/?welcome$/i.test((text_body || '').trim())) {
+    try {
+      await sendWaText(from_wa, AUTO_REPLY_TEXT);
+      welcomeSent = true;
+    } catch (e) {
+      console.error('Welcome (keyword) failed:', e?.message || e);
+    }
+  }
+  
+  // 2) First contact or "always" (skip interactive button replies)
+  if (
+    !welcomeSent &&
+    from_wa &&
+    !isInteractive &&
+    (WELCOME_ALWAYS || (WELCOME_FIRST && await isFirstContact(supabaseAdmin, from_wa)))
+  ) {
+    try {
+      await sendWaText(from_wa, AUTO_REPLY_TEXT);
+    } catch (e) {
+      console.error('Welcome (first/always) failed:', e?.message || e);
+    }
+    welcomeSent = true;
+  }
+
+
   // 5) idempotent insert into Supabase (events log) — only if we have a message id
   if (supabaseAdmin) {
     if (wa_message_id) {
