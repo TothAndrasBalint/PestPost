@@ -1029,7 +1029,7 @@ export async function POST(request) {
   }
 
   // 8) optional auto-reply (text-only guidance; do NOT trigger when media was saved)
-  if (AUTO_REPLY && event_type === 'text' && from_wa && PHONE_ID && TOKEN) {
+  if (!welcomeSent && AUTO_REPLY && event_type === 'text' && from_wa && PHONE_ID && TOKEN) {
     const hasMedia = Boolean(savedPath || media_id); // ← no image_id
     if (!hasMedia) {
       try {
