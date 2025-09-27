@@ -1316,7 +1316,7 @@ export async function POST(request) {
         if (
           LOCK_NOTICE_ON &&
           PREVIEW_LOCK_WINDOW_SEC > 0 &&
-          existingOpenBefore === 1 &&   // ← send on every blocked image during the burst (your preference)
+          existingOpenBefore >= 1 &&   // ← send on every blocked image during the burst (your preference)
           from_wa && PHONE_ID && TOKEN
         ) {
           try {
