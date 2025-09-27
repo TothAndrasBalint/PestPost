@@ -16,6 +16,10 @@ const AUTO_REPLY_TEXT =
   process.env.AUTO_REPLY_TEXT ||
   'Hey, I can only process images for now (with or without caption text)! For signing up, tutorials, contact details visit: www.pestpost.com';
 
+// Welcome controls (pilot onboarding)
+const WELCOME_FIRST  = process.env.WELCOME_FIRST === '1';   // send welcome on first-ever message from a number
+const WELCOME_ALWAYS = process.env.WELCOME_ALWAYS === '1';  // test mode: send welcome on every inbound
+
 // -------- helpers --------
 
 async function recordEvent(supabase, row) {
