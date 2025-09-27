@@ -5,6 +5,8 @@ import { generateCaptionAndTags } from '../lib/generate.js'; // NEW: AI caption 
 import { parseConstraints } from '../lib/constraints.js';
 
 const VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN || 'abc';
+const AUTO_PREVIEW = process.env.AUTO_PREVIEW === '1';
+const PREVIEW_LOCK_WINDOW_SEC = Number(process.env.PREVIEW_LOCK_WINDOW_SEC || 0); // optional, 0 = disabled
 
 // Outbound (optional auto-reply)
 const PHONE_ID = process.env.WA_PHONE_NUMBER_ID;
@@ -26,6 +28,43 @@ const WELCOME_FIRST  = process.env.WELCOME_FIRST === '1';   // send welcome on f
 const WELCOME_ALWAYS = process.env.WELCOME_ALWAYS === '1';  // test mode: send welcome on every inbound
 
 // -------- helpers --------
+// Count open drafts
+
+async function countOpenDraftsForClient(supabase, fromWa, excludeSourceId) {
+  if (!supabase || !fromWa) return 0;
+  let qb = supabase
+    .from('draft_posts')
+    .select('id, created_at, source_message_id', { count: 'exact', head: true })
+    .eq('from_wa', fromWa)
+    .in('status', ['draft']); // treat 'draft' as “open”
+
+  if (excludeSourceId) qb = qb.neq('source_message_id', excludeSourceId);
+
+  // Optional burst window filter
+  if (PREVIEW_LOCK_WINDOW_SEC > 0) {
+    const cutoff = new Date(Date.now() - PREVIEW_LOCK_WINDOW_SEC * 1000).toISOString();
+    qb = qb.gte('created_at', cutoff);
+  }
+
+  const { count, error } = await qb;
+  if (error) {
+    console.warn('countOpenDraftsForClient error:', error.message || error);
+    return 0;
+  }
+  return count || 0;
+}
+
+async function loadDraftBySourceId(supabase, sourceMessageId) {
+  if (!supabase || !sourceMessageId) return null;
+  const { data, error } = await supabase
+    .from('draft_posts')
+    .select('id, from_wa, text_body, media_path, media_mime, caption_final')
+    .eq('source_message_id', sourceMessageId)
+    .limit(1);
+  if (error || !Array.isArray(data) || !data.length) return null;
+  return data[0];
+}
+
 
 // --- utils for client prefs ---
 function toE164Candidate(msisdn) {
@@ -1141,6 +1180,128 @@ export async function POST(request) {
     if (draftErr) console.error('Supabase upsert (draft_posts) error:', draftErr);
     else console.log('Draft created:', { source_message_id: wa_message_id });
   }
+
+  // --- Auto-preview on first open draft for this client ---
+  if (
+    AUTO_PREVIEW &&
+    !draftErr &&
+    from_wa &&
+    savedPath && // only when media was saved
+    PHONE_ID && TOKEN
+  ) {
+    try {
+      // If there was already an open draft *before* this insert, skip sending
+      const existingOpenBefore = await countOpenDraftsForClient(supabaseAdmin, from_wa, wa_message_id);
+      // Now include this draft itself
+      const totalOpen = existingOpenBefore + 1;
+  
+      if (totalOpen === 1) {
+        // Fetch our just-created row (we need the draft ID for button IDs)
+        const myDraft = await loadDraftBySourceId(supabaseAdmin, wa_message_id);
+        if (myDraft && myDraft.id) {
+          // Build caption using client prefs + inline cues
+          const inline = parseConstraints(text_body || '');
+          const merged = mergeConstraintsWithPrefs(inline, clientPrefs || {});
+          const baseSeed = (text_body || '');
+          const seedWithCtx = baseSeed + buildBusinessContextLine(clientPrefs || {});
+  
+          let previewCaption = baseSeed;
+          try {
+            const gen = await generateCaptionAndTags({
+              seedText: seedWithCtx,
+              constraints: merged,
+              clientPrefs: clientPrefs || {}
+            });
+            const modelCaption = gen?.caption_final || null;
+            const hashtags = Array.isArray(gen?.hashtags) ? gen.hashtags : [];
+            const tagLine = hashtags.length ? '\n\n' + hashtags.join(' ') : '';
+            previewCaption = (modelCaption || baseSeed) + tagLine;
+          } catch (e) {
+            console.error('auto-preview: generator failed, using base seed', e?.message || e);
+          }
+  
+          // Create a short-lived signed URL for the image
+          let mediaUrl = null;
+          try {
+            const { data: signed } = await supabaseAdmin
+              .storage
+              .from('media')
+              .createSignedUrl(myDraft.media_path, 60 * 60); // 1h
+            mediaUrl = signed?.signedUrl || null;
+          } catch (e) {
+            console.error('auto-preview: signed URL failed', e?.message || e);
+          }
+  
+          // Send preview (image if we have URL, else text fallback)
+          const endpoint = `https://graph.facebook.com/v20.0/${PHONE_ID}/messages`;
+          let firstMsgId = null;
+  
+          if (mediaUrl) {
+            const payload1 = {
+              messaging_product: 'whatsapp',
+              to: from_wa,
+              type: 'image',
+              image: { link: mediaUrl, caption: previewCaption }
+            };
+            const res1 = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload1)
+            });
+            const j1 = await res1.json().catch(() => ({}));
+            if (res1.ok && Array.isArray(j1?.messages)) firstMsgId = j1.messages[0]?.id || null;
+            else console.error('auto-preview: send image failed', res1.status, j1?.error || j1);
+          } else {
+            const payload1 = {
+              messaging_product: 'whatsapp',
+              to: from_wa,
+              type: 'text',
+              text: { preview_url: false, body: previewCaption }
+            };
+            const res1 = await fetch(endpoint, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload1)
+            });
+            const j1 = await res1.json().catch(() => ({}));
+            if (res1.ok && Array.isArray(j1?.messages)) firstMsgId = j1.messages[0]?.id || null;
+            else console.error('auto-preview: send text failed', res1.status, j1?.error || j1);
+          }
+  
+          // Slight pause (Meta UX) then buttons
+          await new Promise(r => setTimeout(r, 2000));
+          const buttons = {
+            messaging_product: 'whatsapp',
+            to: from_wa,
+            type: 'interactive',
+            interactive: {
+              type: 'button',
+              body: { text: 'Approve this post, or request edits.' },
+              action: {
+                buttons: [
+                  { type: 'reply', reply: { id: `approve:${myDraft.id}`,      title: 'Approve ✅' } },
+                  { type: 'reply', reply: { id: `request_edit:${myDraft.id}`, title: 'Request edit ✍️' } },
+                  { type: 'reply', reply: { id: `dontlike:${myDraft.id}`,     title: 'Don’t like 👎' } }
+                ]
+              }
+            }
+          };
+          const res2 = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(buttons)
+          });
+          const j2 = await res2.json().catch(() => ({}));
+          if (!res2.ok) console.error('auto-preview: buttons failed', res2.status, j2?.error || j2);
+        }
+      } else {
+        console.log('auto-preview: skipped (open draft exists)', { from_wa, totalOpen });
+      }
+    } catch (e) {
+      console.error('auto-preview: flow failed', e?.message || e);
+    }
+  }
+
 
   // 8) optional auto-reply (text-only guidance; do NOT trigger when media was saved)
   if (!welcomeSent && AUTO_REPLY && event_type === 'text' && from_wa && PHONE_ID && TOKEN) {
