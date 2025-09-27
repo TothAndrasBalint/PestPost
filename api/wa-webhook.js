@@ -1163,6 +1163,7 @@ export async function POST(request) {
   }
 
   // 7) create/ensure a draft_post (idempotent on source_message_id)
+  let draftErr = null;
   if (supabaseAdmin && wa_message_id && savedPath) {
     const draft = {
       source_message_id: wa_message_id,
@@ -1176,6 +1177,8 @@ export async function POST(request) {
     const { error: draftErr } = await supabaseAdmin
       .from('draft_posts')
       .upsert(draft, { onConflict: 'source_message_id', ignoreDuplicates: true });
+    
+    draftErr = error || null;
 
     if (draftErr) console.error('Supabase upsert (draft_posts) error:', draftErr);
     else console.log('Draft created:', { source_message_id: wa_message_id });
