@@ -39,18 +39,25 @@ const AUTO_ADVANCE_ON = process.env.AUTO_ADVANCE_ON === '1';
 const AUTO_ADVANCE_DELAY_MS = Number(process.env.AUTO_ADVANCE_DELAY_MS || 1500);
 
 // Load the next pending draft (FIFO) for this client
-async function loadNextPendingDraftForClient(supabase, fromWa) {
+async function loadNextPendingDraftForClient(supabase, fromWa, excludeId) {
   if (!supabase || !fromWa) return null;
-  const { data, error } = await supabase
+
+  let query = supabase
     .from('draft_posts')
     .select('*')
     .eq('from_wa', fromWa)
     .eq('status', 'draft')
+    .is('schedule_strategy', null)          // only UNSCHEDULED drafts
     .order('created_at', { ascending: true })
     .limit(1);
+
+  if (excludeId) query = query.neq('id', excludeId); // extra safety against races
+
+  const { data, error } = await query;
   if (error || !Array.isArray(data) || !data.length) return null;
   return data[0];
 }
+
 
 // Send preview (media/text) + buttons for a specific draft row
 async function sendPreviewForDraftRow(draft, clientPrefs) {
@@ -148,11 +155,11 @@ async function sendPreviewForDraftRow(draft, clientPrefs) {
 }
 
 // Kick the next pending draft after a completion
-async function maybeAutoAdvanceNextPreview(fromWa) {
+async function maybeAutoAdvanceNextPreview(fromWa, excludeDraftId) {
   if (!AUTO_ADVANCE_ON || !fromWa || !supabaseAdmin) return;
   try {
     await sleep(AUTO_ADVANCE_DELAY_MS);
-    const next = await loadNextPendingDraftForClient(supabaseAdmin, fromWa);
+    const next = await loadNextPendingDraftForClient(supabaseAdmin, fromWa, excludeDraftId);
     if (!next) return;
     const prefs = await loadClientPrefs(supabaseAdmin, fromWa);
     await sendPreviewForDraftRow(next, prefs || {});
@@ -160,6 +167,7 @@ async function maybeAutoAdvanceNextPreview(fromWa) {
     console.error('auto-advance: failed', e?.message || e);
   }
 }
+
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
