@@ -335,6 +335,9 @@ export async function POST(request) {
   // 4) normalize fields (now includes media_id + text_body + interactive_id)
   const { wa_message_id, from_wa, event_type, media_id, text_body, interactive_id } = parseWaEvent(body);
 
+  // Load client presets (safe no-op if not found)
+  const clientPrefs = await loadClientPrefs(supabaseAdmin, from_wa);
+
   // --- Welcome hub (first-contact & testing) ---
   // Keep welcomeSent in this POST scope so we can guard later auto-reply logic (Step 2D)
   let welcomeSent = false;
@@ -681,7 +684,8 @@ export async function POST(request) {
   Do not mention edits, dislikes, alternatives, or instructions.
   Do not use the words "don't like", "dislike", "alternative", "edit", "request edit".`;
   
-      const gen = await generateCaptionAndTags({ seedText: seed, constraints: altConstraints, clientPrefs: {} });
+      const seedWithCtx = seed + buildBusinessContextLine(clientPrefs || {});
+      const gen = await generateCaptionAndTags({ seedText: seedWithCtx, constraints: altConstraints, clientPrefs: clientPrefs || {} });
       modelCaption = gen?.caption_final || null;
       hashtags = Array.isArray(gen?.hashtags) ? gen.hashtags : [];
     } catch (e) {
@@ -956,18 +960,28 @@ export async function POST(request) {
         // cap already communicated elsewhere; we still allow edit as a child of same parent
       }
   
-      const constraints = parseConstraints(text_body || '');
+      // Merge inline constraints with client presets
+      let constraints = parseConstraints(text_body || '');
+      constraints = mergeConstraintsWithPrefs(constraints, clientPrefs || {});
+      
+      // Build the seed (existing logic) + append business context
       const seed =
         (parent.caption_final && parent.text_body)
           ? `${parent.caption_final}\n\nEdit request: ${text_body}`
           : (parent.text_body)
           ? `${parent.text_body}\n\nEdit request: ${text_body}`
           : text_body;
-  
+      
+      const seedWithCtx = (seed || '') + buildBusinessContextLine(clientPrefs || {});
+      
       let modelCaption = null;
       let tagLine = '';
       try {
-        const gen = await generateCaptionAndTags({ seedText: seed, constraints, clientPrefs: {} });
+        const gen = await generateCaptionAndTags({
+          seedText: seedWithCtx,
+          constraints,
+          clientPrefs: clientPrefs || {}
+        });
         modelCaption = gen?.caption_final || null;
         const hashtags = Array.isArray(gen?.hashtags) ? gen.hashtags : [];
         tagLine = hashtags.length ? '\n\n' + hashtags.join(' ') : '';
@@ -975,6 +989,7 @@ export async function POST(request) {
         console.error('AI caption generation failed, using user text:', e?.message || e);
       }
       const previewCaption = (modelCaption || text_body) + tagLine;
+
   
       // next variant_num
       let nextVariantNum = 1;
