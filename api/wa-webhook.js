@@ -22,6 +22,27 @@ const WELCOME_ALWAYS = process.env.WELCOME_ALWAYS === '1';  // test mode: send w
 
 // -------- helpers --------
 
+// --- Helper: did this number message us before? ---
+async function isFirstContact(supabase, fromWa) {
+  try {
+    if (!supabase || !fromWa) return false;
+    const { count, error } = await supabase
+      .from('events')
+      .select('wa_message_id', { count: 'exact', head: true })
+      .eq('from_wa', fromWa);
+
+    if (error) {
+      console.warn('isFirstContact error:', error);
+      return false;
+    }
+    return (count || 0) === 0;
+  } catch (e) {
+    console.warn('isFirstContact exception:', e?.message || e);
+    return false;
+  }
+}
+
+
 async function recordEvent(supabase, row) {
   // Guard against bad rows
   if (!row || !row.wa_message_id) {
