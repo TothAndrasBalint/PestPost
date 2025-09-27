@@ -11,7 +11,7 @@ const LOCK_NOTICE_ON = process.env.LOCK_NOTICE_ON === '1';
 const LOCK_NOTICE_TEXT =
   process.env.LOCK_NOTICE_TEXT ||
   "You already have a preview open — approve, edit or delete that first, then I’ll send the next one 👇";
-
+const LOCK_NOTICE_DELAY_MS = Number(process.env.LOCK_NOTICE_DELAY_MS || 4000); // 4s default
 
 // Outbound (optional auto-reply)
 const PHONE_ID = process.env.WA_PHONE_NUMBER_ID;
@@ -33,6 +33,9 @@ const WELCOME_FIRST  = process.env.WELCOME_FIRST === '1';   // send welcome on f
 const WELCOME_ALWAYS = process.env.WELCOME_ALWAYS === '1';  // test mode: send welcome on every inbound
 
 // -------- helpers --------
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 // Count open drafts
 
 async function countOpenDraftsForClient(supabase, fromWa, excludeSourceId) {
@@ -1318,6 +1321,8 @@ export async function POST(request) {
           from_wa && PHONE_ID && TOKEN
         ) {
           try {
+            // Delay so the first message (image+buttons) lands before the courtesy note
+            await sleep(LOCK_NOTICE_DELAY_MS);
             await sendWaText(from_wa, LOCK_NOTICE_TEXT);
           } catch (e) {
             console.error('auto-preview: lock notice failed', e?.message || e);
