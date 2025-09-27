@@ -637,17 +637,20 @@ export async function POST(request) {
 
         if (from_wa && PHONE_ID && TOKEN) {
           try { await sendWaText(from_wa, 'Queued now. 📥'); } catch {}
-          // NEW: auto-advance to the next pending draft
           try { await maybeAutoAdvanceNextPreview(from_wa); } catch (e) {
             console.error('auto-advance(postnow) failed:', e?.message || e);
           }
         }
-
+      } catch (e) {
+        console.error('postnow update failed:', e?.message || e);
+      }
+    }
 
     return new Response(JSON.stringify({ ok: true, kind: 'schedule:now' }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
   }
+
 
   // --- Handle Let AI schedule (scheduling) ---
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('aisched:')) {
@@ -666,17 +669,20 @@ export async function POST(request) {
 
         if (from_wa && PHONE_ID && TOKEN) {
           try { await sendWaText(from_wa, 'Okay — I’ll queue this for AI scheduling. 🤖'); } catch {}
-          // NEW: auto-advance to the next pending draft
           try { await maybeAutoAdvanceNextPreview(from_wa); } catch (e) {
             console.error('auto-advance(aisched) failed:', e?.message || e);
           }
         }
-
-
+      } catch (e) {
+        console.error('aisched update failed:', e?.message || e);
+      }
+    }
+  
     return new Response(JSON.stringify({ ok: true, kind: 'schedule:ai' }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
   }
+
 
   // --- Handle Request edit button (interactive.button_reply) and exit early ---
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('request_edit:')) {
