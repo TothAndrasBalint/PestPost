@@ -7,6 +7,11 @@ import { parseConstraints } from '../lib/constraints.js';
 const VERIFY_TOKEN = process.env.WA_VERIFY_TOKEN || 'abc';
 const AUTO_PREVIEW = process.env.AUTO_PREVIEW === '1';
 const PREVIEW_LOCK_WINDOW_SEC = Number(process.env.PREVIEW_LOCK_WINDOW_SEC || 0); // optional, 0 = disabled
+const LOCK_NOTICE_ON = process.env.LOCK_NOTICE_ON === '1';
+const LOCK_NOTICE_TEXT =
+  process.env.LOCK_NOTICE_TEXT ||
+  "You already have a preview open — approve, edit or delete that first, then I’ll send the next one 👇";
+
 
 // Outbound (optional auto-reply)
 const PHONE_ID = process.env.WA_PHONE_NUMBER_ID;
@@ -1303,8 +1308,23 @@ export async function POST(request) {
           if (!res2.ok) console.error('auto-preview: buttons failed', res2.status, j2?.error || j2);
         }
       } else {
-        console.log('auto-preview: skipped (open draft exists)', { from_wa, totalOpen });
+        console.log('auto-preview: skipped (open draft exists)', { from_wa, totalOpen, existingOpenBefore });
+      
+        // Courtesy note whenever there’s already an open draft in the burst window
+        if (
+          LOCK_NOTICE_ON &&
+          PREVIEW_LOCK_WINDOW_SEC > 0 &&
+          existingOpenBefore >= 1 &&   // ← send on every blocked image during the burst (your preference)
+          from_wa && PHONE_ID && TOKEN
+        ) {
+          try {
+            await sendWaText(from_wa, LOCK_NOTICE_TEXT);
+          } catch (e) {
+            console.error('auto-preview: lock notice failed', e?.message || e);
+          }
+        }
       }
+
     } catch (e) {
       console.error('auto-preview: flow failed', e?.message || e);
     }
