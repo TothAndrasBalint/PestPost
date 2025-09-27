@@ -16,6 +16,11 @@ const AUTO_REPLY_TEXT =
   process.env.AUTO_REPLY_TEXT ||
   'Hey, I can only process images for now (with or without caption text)! For signing up, tutorials, contact details visit: www.pestpost.com';
 
+// Distinct welcome text (first-contact & tests)
+const WELCOME_TEXT =
+  process.env.WELCOME_TEXT ||
+  AUTO_REPLY_TEXT; // fallback so nothing breaks if not set
+
 // Welcome controls (pilot onboarding)
 const WELCOME_FIRST  = process.env.WELCOME_FIRST === '1';   // send welcome on first-ever message from a number
 const WELCOME_ALWAYS = process.env.WELCOME_ALWAYS === '1';  // test mode: send welcome on every inbound
@@ -259,7 +264,7 @@ export async function POST(request) {
     (WELCOME_ALWAYS || (WELCOME_FIRST && await isFirstContact(supabaseAdmin, from_wa)))
   ) {
     try {
-      await sendWaText(from_wa, AUTO_REPLY_TEXT);
+      await sendWaText(from_wa, WELCOME_TEXT);
     } catch (e) {
       console.error('Welcome (first/always) failed:', e?.message || e);
     }
@@ -1033,7 +1038,7 @@ export async function POST(request) {
     const hasMedia = Boolean(savedPath || media_id); // ← no image_id
     if (!hasMedia) {
       try {
-        await sendWaText(from_wa, AUTO_REPLY_TEXT);
+        await sendWaText(from_wa, WELCOME_TEXT);
       } catch (e) {
         console.error('Auto-reply failed:', e?.message || e);
       }
