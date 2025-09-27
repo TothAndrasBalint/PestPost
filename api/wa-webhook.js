@@ -27,6 +27,100 @@ const WELCOME_ALWAYS = process.env.WELCOME_ALWAYS === '1';  // test mode: send w
 
 // -------- helpers --------
 
+// --- utils for client prefs ---
+function toE164Candidate(msisdn) {
+  if (!msisdn) return null;
+  const s = String(msisdn).trim();
+  if (s.startsWith('+')) return s;
+  // WhatsApp sends digits with country code, no '+'. Accept 7..15 digits.
+  if (/^\d{7,15}$/.test(s)) return '+' + s;
+  return null;
+}
+
+function splitCsv(txt) {
+  if (!txt) return [];
+  return String(txt)
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function normalizeClientPrefsRow(row = {}) {
+  const emoji = row.emoji_on === false ? 'off' : 'on';
+  const hashtagsPref = splitCsv(row.hashtags_pref);
+  return {
+    // knobs used by /lib/generate.js defaults
+    language: row.language || 'EN',
+    tone: row.tone || 'casual',
+    length: row.length || 'short',
+    emoji, // 'on' | 'off'
+    hashtags: hashtagsPref,         // array of preferred tags (no #)
+    hashtags_max: Number(row.hashtags_max ?? 6),
+
+    // extra guidance we’ll inject into the seed
+    business_type: row.business_type || null,
+    primary_offers: splitCsv(row.primary_offers),
+    location_area: row.location_area || null,
+    brand_keywords: splitCsv(row.brand_keywords),
+    seasonal_theme: row.seasonal_theme || null,
+
+    // optional constraints-y lists (used as fallback when user sent none)
+    must_include: splitCsv(row.must_include),
+    banned_words: splitCsv(row.banned_words),
+    cta_pool: splitCsv(row.cta_pool),
+
+    // ops flags (fyi; we don’t switch behavior yet)
+    state: row.state || 'preview_only'
+  };
+}
+
+async function loadClientPrefs(supabase, fromWa) {
+  try {
+    const e164 = toE164Candidate(fromWa);
+    if (!e164 || !supabase) return null;
+    const { data, error } = await supabase
+      .from('clients')
+      .select('*')
+      .eq('phone_e164', e164)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.warn('clients lookup error:', error.message || error);
+      return null;
+    }
+    if (!data) return null;
+    return normalizeClientPrefsRow(data);
+  } catch (e) {
+    console.warn('clients lookup exception:', e?.message || e);
+    return null;
+  }
+}
+
+function mergeConstraintsWithPrefs(cons = {}, prefs = {}) {
+  const out = { ...cons };
+  // If user didn’t specify must_include, fall back to client preset
+  if ((!out.must_include || out.must_include.length === 0) && Array.isArray(prefs.must_include) && prefs.must_include.length) {
+    out.must_include = prefs.must_include;
+  }
+  // If user didn’t provide hashtags, seed with preferred tags (capped)
+  if ((!out.hashtags || out.hashtags.length === 0) && Array.isArray(prefs.hashtags) && prefs.hashtags.length) {
+    const cap = Number(prefs.hashtags_max || 6);
+    out.hashtags = prefs.hashtags.slice(0, Math.max(0, cap));
+  }
+  return out;
+}
+
+function buildBusinessContextLine(prefs = {}) {
+  const bits = [];
+  if (prefs.business_type) bits.push(`We are a ${prefs.business_type}.`);
+  if (prefs.primary_offers && prefs.primary_offers.length) bits.push(`Highlight: ${prefs.primary_offers.join(', ')}.`);
+  if (prefs.location_area) bits.push(`Area: ${prefs.location_area}.`);
+  if (prefs.brand_keywords && prefs.brand_keywords.length) bits.push(`Brand vibe: ${prefs.brand_keywords.join(', ')}.`);
+  if (prefs.seasonal_theme) bits.push(`Seasonal theme: ${prefs.seasonal_theme}.`);
+  return bits.length ? `\n\nBusiness context: ${bits.join(' ')}` : '';
+}
+
+
 // --- Helper: did this number message us before? ---
 async function isFirstContact(supabase, fromWa) {
   try {
