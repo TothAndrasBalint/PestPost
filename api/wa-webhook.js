@@ -302,7 +302,6 @@ async function sendWaText(to, body) {
   return data;
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // -------- routes --------
 
