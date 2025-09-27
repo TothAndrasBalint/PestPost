@@ -249,7 +249,7 @@ export async function POST(request) {
   // 1) Manual test keyword (works anytime): "WELCOME" or "/welcome"
   if (!welcomeSent && from_wa && text_body && /^\/?welcome$/i.test((text_body || '').trim())) {
     try {
-      await sendWaText(from_wa, AUTO_REPLY_TEXT);
+      await sendWaText(from_wa, WELCOME_TEXT);
       welcomeSent = true;
     } catch (e) {
       console.error('Welcome (keyword) failed:', e?.message || e);
@@ -1038,7 +1038,7 @@ export async function POST(request) {
     const hasMedia = Boolean(savedPath || media_id); // ← no image_id
     if (!hasMedia) {
       try {
-        await sendWaText(from_wa, WELCOME_TEXT);
+        await sendWaText(from_wa, AUTO_REPLY_TEXT);
       } catch (e) {
         console.error('Auto-reply failed:', e?.message || e);
       }
