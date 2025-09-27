@@ -632,7 +632,7 @@ export async function POST(request) {
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('postnow:')) {
     const idStr = interactive_id.split(':')[1];
     const draftId = Number(idStr);
-
+  
     if (Number.isFinite(draftId) && supabaseAdmin) {
       try {
         await supabaseAdmin
@@ -642,10 +642,11 @@ export async function POST(request) {
             scheduled_at: new Date().toISOString()
           })
           .eq('id', draftId);
-
+  
         if (from_wa && PHONE_ID && TOKEN) {
           try { await sendWaText(from_wa, 'Queued now. 📥'); } catch {}
-          try { await maybeAutoAdvanceNextPreview(from_wa); } catch (e) {
+          // Auto-advance to the next pending draft (exclude the one we just scheduled)
+          try { await maybeAutoAdvanceNextPreview(from_wa, draftId); } catch (e) {
             console.error('auto-advance(postnow) failed:', e?.message || e);
           }
         }
@@ -653,18 +654,19 @@ export async function POST(request) {
         console.error('postnow update failed:', e?.message || e);
       }
     }
-
+  
     return new Response(JSON.stringify({ ok: true, kind: 'schedule:now' }), {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
   }
 
 
+
   // --- Handle Let AI schedule (scheduling) ---
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('aisched:')) {
     const idStr = interactive_id.split(':')[1];
     const draftId = Number(idStr);
-
+  
     if (Number.isFinite(draftId) && supabaseAdmin) {
       try {
         await supabaseAdmin
@@ -674,10 +676,11 @@ export async function POST(request) {
             scheduled_at: null // to be set by your AI scheduler later
           })
           .eq('id', draftId);
-
+  
         if (from_wa && PHONE_ID && TOKEN) {
           try { await sendWaText(from_wa, 'Okay — I’ll queue this for AI scheduling. 🤖'); } catch {}
-          try { await maybeAutoAdvanceNextPreview(from_wa); } catch (e) {
+          // Auto-advance to the next pending draft (exclude the one we just scheduled)
+          try { await maybeAutoAdvanceNextPreview(from_wa, draftId); } catch (e) {
             console.error('auto-advance(aisched) failed:', e?.message || e);
           }
         }
@@ -690,6 +693,7 @@ export async function POST(request) {
       headers: { 'content-type': 'application/json; charset=utf-8' }
     });
   }
+
 
 
   // --- Handle Request edit button (interactive.button_reply) and exit early ---
