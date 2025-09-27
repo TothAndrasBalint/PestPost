@@ -1163,7 +1163,8 @@ export async function POST(request) {
   }
 
   // 7) create/ensure a draft_post (idempotent on source_message_id)
-  let draftErr = null;
+  let draftErr = null; // hoisted so we can use it below
+  
   if (supabaseAdmin && wa_message_id && savedPath) {
     const draft = {
       source_message_id: wa_message_id,
@@ -1173,23 +1174,27 @@ export async function POST(request) {
       media_mime: savedMime || null,
       status: 'draft'
     };
-
-    const { error: draftErr } = await supabaseAdmin
+  
+    // DO NOT redeclare draftErr here; capture as "error" and assign to the outer draftErr
+    const { error } = await supabaseAdmin
       .from('draft_posts')
       .upsert(draft, { onConflict: 'source_message_id', ignoreDuplicates: true });
-    
+  
     draftErr = error || null;
-
-    if (draftErr) console.error('Supabase upsert (draft_posts) error:', draftErr);
-    else console.log('Draft created:', { source_message_id: wa_message_id });
+  
+    if (draftErr) {
+      console.error('Supabase upsert (draft_posts) error:', draftErr);
+    } else {
+      console.log('Draft created:', { source_message_id: wa_message_id });
+    }
   }
-
+  
   // --- Auto-preview on first open draft for this client ---
   if (
     AUTO_PREVIEW &&
     !draftErr &&
     from_wa &&
-    savedPath && // only when media was saved
+    savedPath &&          // only when media was saved
     PHONE_ID && TOKEN
   ) {
     try {
