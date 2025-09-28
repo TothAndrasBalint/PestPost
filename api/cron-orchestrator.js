@@ -2,7 +2,9 @@
 import * as Scheduler from './cron-scheduler.js';
 import * as Runner from './cron-runner.js';
 import * as Publisher from './cron-publisher.js';
+import { supabaseAdmin } from '../lib/supabase.js';
 
+const DRAFT_EXPIRY_SECONDS = Number(process.env.DRAFT_EXPIRY_SECONDS || 3600); // 1h
 const CRON_TOKEN    = process.env.CRON_TOKEN || process.env.ADMIN_API_TOKEN || '';
 const CRON_SECRET   = process.env.CRON_SECRET || ''; // Vercel Cron sends: Authorization: Bearer <CRON_SECRET>
 const CRON_ORCH_KEY = process.env.CRON_ORCH_KEY || ''; // optional ?key=... fallback
