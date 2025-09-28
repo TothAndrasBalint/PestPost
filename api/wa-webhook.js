@@ -1294,6 +1294,19 @@ export async function POST(request) {
         });
       }
       const insertedVariant = inserted[0];
+
+      // Prevent the original parent draft from resurfacing later
+      try {
+        await supabaseAdmin
+          .from('draft_posts')
+          .update({ status: 'canceled' })
+          .eq('id', parent.id)
+          .is('schedule_strategy', null)  // only if unscheduled
+          .in('status', ['draft', 'approved']); // safe if you mark approved on Approve
+      } catch (e) {
+        console.error('cancel parent after edit variant failed:', e?.message || e);
+      }
+
   
       // send preview, then buttons
       if (PHONE_ID && TOKEN) {
