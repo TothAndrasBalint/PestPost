@@ -984,6 +984,17 @@ export async function POST(request) {
         status: 500, headers: { 'content-type': 'application/json; charset=utf-8' }
       });
     }
+
+    try {
+      await supabaseAdmin
+        .from('draft_posts')
+        .update({ status: 'canceled' })
+        .eq('id', parent.id)
+        .is('schedule_strategy', null)
+        .in('status', ['draft', 'approved']);
+    } catch (e) {
+      console.error('cancel parent after dontlike variant failed:', e?.message || e);
+    }
   
     // 6) send preview (image+caption if media), capture message_id; then buttons with context
     if (PHONE_ID && TOKEN) {
