@@ -65,3 +65,21 @@ export async function GET(request) {
     return json({ ok: false, error: String(e) }, 500);
   }
 }
+
+async function expireOldDrafts() {
+  if (!DRAFT_EXPIRY_SECONDS || DRAFT_EXPIRY_SECONDS <= 0) {
+    return { ok: true, skipped: true };
+  }
+  const cutoffIso = new Date(Date.now() - DRAFT_EXPIRY_SECONDS * 1000).toISOString();
+
+  const { data, error } = await supabaseAdmin
+    .from('draft_posts')
+    .update({ status: 'canceled' })  // minimal, schema-safe
+    .eq('status', 'draft')
+    .is('schedule_strategy', null)
+    .lt('created_at', cutoffIso)
+    .select('id');
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, expired: data?.length || 0 };
+}
