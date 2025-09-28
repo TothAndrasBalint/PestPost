@@ -16,6 +16,25 @@ function json(body, status = 200) {
   });
 }
 
+async function expireOldDrafts() {
+  if (!DRAFT_EXPIRY_SECONDS || DRAFT_EXPIRY_SECONDS <= 0) {
+    return { ok: true, skipped: true };
+  }
+  const cutoffIso = new Date(Date.now() - DRAFT_EXPIRY_SECONDS * 1000).toISOString();
+
+  const { data, error } = await supabaseAdmin
+    .from('draft_posts')
+    .update({ status: 'canceled' })  // minimal, schema-safe
+    .in('status', ['draft', 'approved'])
+    .is('schedule_strategy', null)
+    .lt('created_at', cutoffIso)
+    .select('id');
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, expired: data?.length || 0 };
+}
+
+
 export async function GET(request) {
   const url = new URL(request.url);
   const hdr = request.headers.get('authorization') || '';
@@ -32,7 +51,10 @@ export async function GET(request) {
   if (!authorized) {
     return json({ ok: false, error: 'unauthorized' }, 401);
   }
-
+  
+  const expireRes = await expireOldDrafts();
+  if (!expireRes?.ok) console.error('[cron-orchestrator] expire error', expireRes?.error);
+  
   // Token used to call internal stages
   const internalToken = CRON_TOKEN || CRON_SECRET;
   if (!internalToken) return json({ ok: false, error: 'no_internal_token' }, 500);
@@ -64,22 +86,4 @@ export async function GET(request) {
     console.error('[cron-orchestrator] error', e);
     return json({ ok: false, error: String(e) }, 500);
   }
-}
-
-async function expireOldDrafts() {
-  if (!DRAFT_EXPIRY_SECONDS || DRAFT_EXPIRY_SECONDS <= 0) {
-    return { ok: true, skipped: true };
-  }
-  const cutoffIso = new Date(Date.now() - DRAFT_EXPIRY_SECONDS * 1000).toISOString();
-
-  const { data, error } = await supabaseAdmin
-    .from('draft_posts')
-    .update({ status: 'canceled' })  // minimal, schema-safe
-    .eq('status', 'draft')
-    .is('schedule_strategy', null)
-    .lt('created_at', cutoffIso)
-    .select('id');
-
-  if (error) return { ok: false, error: error.message };
-  return { ok: true, expired: data?.length || 0 };
 }
