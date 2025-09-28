@@ -32,7 +32,44 @@ const WELCOME_TEXT =
 const WELCOME_FIRST  = process.env.WELCOME_FIRST === '1';   // send welcome on first-ever message from a number
 const WELCOME_ALWAYS = process.env.WELCOME_ALWAYS === '1';  // test mode: send welcome on every inbound
 
+// Expiry guard (reuse the same value as cron)
+const DRAFT_EXPIRY_SECONDS = Number(process.env.DRAFT_EXPIRY_SECONDS || 3600);
+const EXPIRED_DRAFT_TEXT = process.env.EXPIRED_DRAFT_TEXT
+  || "This draft expired because it wasn’t approved within an hour. Please send a new image.";
+
 // -------- helpers --------
+
+// Minimal fetch + check
+async function fetchDraftMeta(draftId) {
+  if (!supabaseAdmin || !Number.isFinite(draftId)) return null;
+  const { data, error } = await supabaseAdmin
+    .from('draft_posts')
+    .select('id,status,schedule_strategy,created_at,from_wa')
+    .eq('id', draftId)
+    .limit(1)
+    .maybeSingle();
+  return error ? null : data;
+}
+
+function isDraftExpired(row) {
+  if (!row) return true;
+  if (row.status === 'canceled') return true;
+  // If it already has a schedule_strategy, it’s not “unscheduled/expired”
+  if (row.schedule_strategy) return false;
+  const ageSec = (Date.now() - new Date(row.created_at).getTime()) / 1000;
+  return ageSec > DRAFT_EXPIRY_SECONDS;
+}
+
+async function bailIfExpired(draftId, toWa) {
+  const row = await fetchDraftMeta(draftId);
+  if (isDraftExpired(row)) {
+    if (toWa && PHONE_ID && TOKEN) {
+      try { await sendWaText(toWa, EXPIRED_DRAFT_TEXT); } catch {}
+    }
+    return true; // tell caller to stop
+  }
+  return false;
+}
 
 // --- Auto-advance controls ---
 const AUTO_ADVANCE_ON = process.env.AUTO_ADVANCE_ON === '1';
@@ -572,6 +609,12 @@ export async function POST(request) {
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('approve:')) {
     const idStr = interactive_id.split(':')[1];
     const draftId = Number(idStr);
+    if (await bailIfExpired(draftId, from_wa)) {
+      return new Response(JSON.stringify({ ok: true, kind: 'expired' }), {
+        headers: { 'content-type': 'application/json; charset=utf-8' }
+      });
+    }
+
   
     if (Number.isFinite(draftId) && supabaseAdmin) {
       // Update only if NOT already approved; return the row if it changed
@@ -632,6 +675,12 @@ export async function POST(request) {
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('postnow:')) {
     const idStr = interactive_id.split(':')[1];
     const draftId = Number(idStr);
+    if (await bailIfExpired(draftId, from_wa)) {
+      return new Response(JSON.stringify({ ok: true, kind: 'expired' }), {
+        headers: { 'content-type': 'application/json; charset=utf-8' }
+      });
+    }
+
   
     if (Number.isFinite(draftId) && supabaseAdmin) {
       try {
@@ -666,6 +715,12 @@ export async function POST(request) {
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('aisched:')) {
     const idStr = interactive_id.split(':')[1];
     const draftId = Number(idStr);
+    if (await bailIfExpired(draftId, from_wa)) {
+      return new Response(JSON.stringify({ ok: true, kind: 'expired' }), {
+        headers: { 'content-type': 'application/json; charset=utf-8' }
+      });
+    }
+
   
     if (Number.isFinite(draftId) && supabaseAdmin) {
       try {
@@ -700,6 +755,12 @@ export async function POST(request) {
   if (event_type === 'interactive' && interactive_id && interactive_id.startsWith('request_edit:')) {
     const idStr = interactive_id.split(':')[1];
     const draftId = Number(idStr);
+    if (await bailIfExpired(draftId, from_wa)) {
+      return new Response(JSON.stringify({ ok: true, kind: 'expired' }), {
+        headers: { 'content-type': 'application/json; charset=utf-8' }
+      });
+    }
+
 
     if (Number.isFinite(draftId) && supabaseAdmin) {
       try {
@@ -782,6 +843,13 @@ export async function POST(request) {
         status: 400, headers: { 'content-type': 'application/json; charset=utf-8' }
       });
     }
+    // ⬇️ Insert this guard here
+    if (await bailIfExpired(parentId, from_wa)) {
+      return new Response(JSON.stringify({ ok: true, kind: 'expired' }), {
+        headers: { 'content-type': 'application/json; charset=utf-8' }
+      });
+    }
+    
   
     // Idempotency: if this interactive event was already handled, skip (Meta may retry)
     try {
